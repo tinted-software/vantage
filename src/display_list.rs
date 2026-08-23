@@ -1,10 +1,11 @@
 //! OpenGL Display List compilation and playback engine.
 
 use crate::matrix::{Mat4, MatrixMode};
+use crate::sync::RwLock;
 use crate::types::*;
-use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use alloc::collections::BTreeMap as HashMap;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]

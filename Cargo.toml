@@ -13,21 +13,23 @@ include = [
 
 [lib]
 name = "angle_wgpu"
-crate-type = ["rlib", "staticlib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[features]
+default = ["capi"]
+std = [] 
+capi = []
 
 [dependencies]
-bytemuck = { version = "1.25.2", features = ["derive"] }
-cbindgen = "0.29.4"
+bytemuck = { version = "1.25.2", default-features = false, features = ["derive"] }
 glam = { version = "0.33.5", default-features = false, features = ["nostd-libm", "all-types"] }
-log = "0.4.34"
-parking_lot = "0.12.5"
+hashbrown = { version = "0.17.1", default-features = false, features = ["alloc"] }
+lock_api = "0.4.14"
 raw-window-handle = { version = "0.6.2", default-features = false }
-wgpu = { version = "30.0.1", default-features = false, features = ["wgsl", "vulkan", "gles", "metal"] }
-winit = { version = "0.31.0-beta.2", default-features = false, features = ["x11"] }
-zune-core = { version = "0.5.3", default-features = false }
-zune-png = { version = "0.5.2", default-features = false, features = ["sse", "std"] }
+wgpu = { git = "https://github.com/gfx-rs/wgpu", default-features = false, features = ["wgsl", "vulkan", "gles", "metal"] }
+zlib-rs = { version = "0.6.7", default-features = false, features = ["c-allocator"] }
 
-[dev-dependencies]
+[build-dependencies]
 cbindgen = "0.29.4"
 
 [profile.dev.package."*"]
@@ -36,3 +38,21 @@ opt-level = 3
 [profile.dev]
 opt-level = 2
 split-debuginfo = "packed"
+
+[package.metadata.capi.library]
+name = "angle_wgpu"
+
+[package.metadata.capi.pkg_config]
+filename = "glesv1_cm"
+name = "glesv1_cm"
+library = "angle_wgpu"
+
+[package.metadata.capi.install.include]
+asset = [
+    { from = "include/**/*", to = "." }
+]
+
+[package.metadata.capi.install.data]
+asset = [
+    { from = "glvnd/egl_vendor.d/10_angle_wgpu.json", to = "glvnd/egl_vendor.d" },
+]

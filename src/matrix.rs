@@ -5,6 +5,8 @@
 //! `glam::Mat4` already uses, so this is a thin API-compatible wrapper for
 //! the rest of the fixed-function emulation.
 
+use alloc::vec::Vec;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MatrixMode {
     ModelView = 0,

@@ -4,11 +4,12 @@ use crate::display_list::{DisplayList, DisplayListOp, DisplayListRegistry, Verte
 use crate::matrix::{Mat4, MatrixMode, MatrixStack};
 use crate::renderer::{PipelineKey, WgpuRenderer};
 use crate::shader::FixedFunctionUniforms;
+use crate::sync::Mutex;
 use crate::texture::{TextureManager, TextureObject};
 use crate::types::*;
-use parking_lot::Mutex;
-use std::ffi::c_void;
-use std::sync::Arc;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::ffi::c_void;
 
 #[derive(Debug, Clone)]
 pub struct LightState {
@@ -44,7 +45,10 @@ impl Default for LightState {
 pub struct GlContext {
     pub id: u32,
     pub renderer: Option<Arc<Mutex<WgpuRenderer>>>,
-    pub texture_manager: Arc<Mutex<TextureManager>>,
+    /// Owned by the context: every access already happens under the
+    /// context lock (`with_context` / `&mut self` methods), so no inner
+    /// mutex is needed.
+    pub texture_manager: TextureManager,
     pub display_lists: Arc<DisplayListRegistry>,
 
     // Matrix state
@@ -84,7 +88,7 @@ pub struct GlContext {
 
     pub array_buffer_binding: GLuint,
     pub element_array_buffer_binding: GLuint,
-    pub buffers: std::collections::HashMap<GLuint, Vec<u8>>,
+    pub buffers: hashbrown::HashMap<GLuint, Vec<u8>>,
     pub next_buffer_id: GLuint,
 
     // Server enables
@@ -116,7 +120,7 @@ pub struct GlContext {
     pub depth_func: GLenum,
     pub depth_mask: bool,
     pub depth_range: (f32, f32),
-    pub hints: std::collections::HashMap<GLenum, GLenum>,
+    pub hints: hashbrown::HashMap<GLenum, GLenum>,
 
     // Alpha test state
     pub alpha_func: GLenum,
@@ -180,7 +184,7 @@ impl GlContext {
     pub fn new(
         id: u32,
         renderer: Option<Arc<Mutex<WgpuRenderer>>>,
-        texture_manager: Arc<Mutex<TextureManager>>,
+        texture_manager: TextureManager,
         display_lists: Arc<DisplayListRegistry>,
     ) -> Self {
         Self {
@@ -199,24 +203,24 @@ impl GlContext {
             vertex_pointer_size: 3,
             vertex_pointer_type: GL_FLOAT,
             vertex_pointer_stride: 0,
-            vertex_pointer: std::ptr::null(),
+            vertex_pointer: core::ptr::null(),
             texcoord_array_enabled: false,
             texcoord_pointer_size: 2,
             texcoord_pointer_type: GL_FLOAT,
             texcoord_pointer_stride: 0,
-            texcoord_pointer: std::ptr::null(),
+            texcoord_pointer: core::ptr::null(),
             color_array_enabled: false,
             color_pointer_size: 4,
             color_pointer_type: GL_FLOAT,
             color_pointer_stride: 0,
-            color_pointer: std::ptr::null(),
+            color_pointer: core::ptr::null(),
             normal_array_enabled: false,
             normal_pointer_type: GL_FLOAT,
             normal_pointer_stride: 0,
-            normal_pointer: std::ptr::null(),
+            normal_pointer: core::ptr::null(),
             array_buffer_binding: 0,
             element_array_buffer_binding: 0,
-            buffers: std::collections::HashMap::new(),
+            buffers: hashbrown::HashMap::new(),
             next_buffer_id: 1,
             texture_2d_enabled: false,
             blend_enabled: false,
@@ -242,7 +246,7 @@ impl GlContext {
             depth_func: GL_LEQUAL,
             depth_mask: true,
             depth_range: (0.0, 1.0),
-            hints: std::collections::HashMap::new(),
+            hints: hashbrown::HashMap::new(),
             alpha_func: GL_ALWAYS,
             alpha_ref: 0.0,
             fog_mode: GL_LINEAR,
@@ -593,7 +597,7 @@ impl GlContext {
             return;
         };
 
-        let (final_vertices, final_indices): (&[VertexData], Option<std::borrow::Cow<[u32]>>) =
+        let (final_vertices, final_indices): (&[VertexData], Option<alloc::borrow::Cow<[u32]>>) =
             if mode == GL_QUADS {
                 // Expand quads to triangle indexed list
                 let quad_count = vertices.len() / 4;
@@ -607,18 +611,18 @@ impl GlContext {
                     inds.push(base + 2);
                     inds.push(base + 3);
                 }
-                (vertices, Some(std::borrow::Cow::Owned(inds)))
+                (vertices, Some(alloc::borrow::Cow::Owned(inds)))
             } else if let Some(inds) = indices {
-                (vertices, Some(std::borrow::Cow::Borrowed(inds)))
+                (vertices, Some(alloc::borrow::Cow::Borrowed(inds)))
             } else {
                 (vertices, None)
             };
         let key = self.build_pipeline_key(mode);
         let uniforms = self.build_uniforms();
 
-        let mut tex_mgr = self.texture_manager.lock();
         let mut fallback_white = TextureObject::new(0, GL_TEXTURE_2D);
-        let tex = tex_mgr
+        let tex = self
+            .texture_manager
             .get_current_texture_mut()
             .unwrap_or(&mut fallback_white);
 
@@ -705,8 +709,7 @@ impl GlContext {
                     self.current_matrix_stack().scale(x, y, z);
                 }
                 DisplayListOp::BindTexture(id) => {
-                    let mut tm = self.texture_manager.lock();
-                    tm.bind_texture(GL_TEXTURE_2D, id);
+                    self.texture_manager.bind_texture(GL_TEXTURE_2D, id);
                 }
                 DisplayListOp::Enable(cap) => {
                     self.set_enable(cap, true);

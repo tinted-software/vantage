@@ -1,12 +1,14 @@
 //! wgpu device, queue, surface, pipeline cache, and rendering backend.
 #![allow(unused_imports, dead_code)]
 use crate::display_list::VertexData;
+use crate::error::AngleWgpuError;
 use crate::shader::{FixedFunctionUniforms, FIXED_FUNCTION_WGSL};
 use crate::texture::TextureObject;
 use crate::types::*;
-use std::collections::HashMap;
-use std::sync::Arc;
-use winit::window::Window;
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
+use hashbrown::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
@@ -57,7 +59,7 @@ pub struct WgpuRenderer {
     pub surface_config: Option<wgpu::SurfaceConfiguration>,
     pub surface_format: wgpu::TextureFormat,
     pub alpha_mode: wgpu::CompositeAlphaMode,
-    pub window: Option<Arc<dyn Window>>,
+    pub present_mode: wgpu::PresentMode,
     pub width: u32,
     pub height: u32,
 
@@ -102,7 +104,7 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
-    pub async fn new_headless(width: u32, height: u32) -> Result<Self, String> {
+    pub async fn new_headless(width: u32, height: u32) -> Result<Self, AngleWgpuError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
         let adapter = match instance
@@ -123,7 +125,7 @@ impl WgpuRenderer {
                     apply_limit_buckets: false,
                 })
                 .await
-                .map_err(|e| format!("Failed to find suitable wgpu adapter: {e:?}"))?,
+                .map_err(AngleWgpuError::RequestAdapter)?,
         };
 
         let (device, queue) = adapter
@@ -134,9 +136,10 @@ impl WgpuRenderer {
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
                 experimental_features: wgpu::ExperimentalFeatures::default(),
+                default_queue: wgpu::QueueDescriptor::default(),
             })
             .await
-            .map_err(|e| format!("Failed to create wgpu device: {e}"))?;
+            .map_err(AngleWgpuError::RequestDevice)?;
 
         let surface_format = wgpu::TextureFormat::Bgra8Unorm;
         Self::init_with_device(
@@ -144,7 +147,6 @@ impl WgpuRenderer {
             adapter,
             device,
             queue,
-            None,
             None,
             surface_format,
             wgpu::CompositeAlphaMode::Opaque,
@@ -159,10 +161,9 @@ impl WgpuRenderer {
         device: wgpu::Device,
         queue: wgpu::Queue,
         surface: wgpu::Surface<'static>,
-        window: Option<Arc<dyn Window>>,
         width: u32,
         height: u32,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AngleWgpuError> {
         let caps = surface.get_capabilities(&adapter);
         // GLES 1.x writes 8-bit UNORM colors with no sRGB framebuffer.
         // Prefer a linear UNORM swapchain; an *Srgb format would encode
@@ -194,11 +195,6 @@ impl WgpuRenderer {
                 .copied()
                 .unwrap_or(wgpu::CompositeAlphaMode::Opaque)
         };
-        eprintln!(
-            "[angle_wgpu] adapter={:?} format={surface_format:?} alpha={alpha_mode:?} modes={:?}",
-            adapter.get_info(),
-            caps.alpha_modes
-        );
 
         Self::init_with_device(
             instance,
@@ -206,7 +202,6 @@ impl WgpuRenderer {
             device,
             queue,
             Some(surface),
-            window,
             surface_format,
             alpha_mode,
             width,
@@ -220,12 +215,11 @@ impl WgpuRenderer {
         device: wgpu::Device,
         queue: wgpu::Queue,
         surface: Option<wgpu::Surface<'static>>,
-        window: Option<Arc<dyn Window>>,
         surface_format: wgpu::TextureFormat,
         alpha_mode: wgpu::CompositeAlphaMode,
         width: u32,
         height: u32,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, AngleWgpuError> {
         let w = width.max(1);
         let h = height.max(1);
 
@@ -243,7 +237,7 @@ impl WgpuRenderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<
+                        min_binding_size: core::num::NonZeroU64::new(core::mem::size_of::<
                             FixedFunctionUniforms,
                         >()
                             as u64),
@@ -289,7 +283,7 @@ impl WgpuRenderer {
         // draws within a frame share one un-submitted command encoder)
         // every draw.
         let uniform_align = device.limits().min_uniform_buffer_offset_alignment as u64;
-        let uniform_struct_size = std::mem::size_of::<FixedFunctionUniforms>() as u64;
+        let uniform_struct_size = core::mem::size_of::<FixedFunctionUniforms>() as u64;
         let uniform_stride = uniform_struct_size.div_ceil(uniform_align) * uniform_align;
         let uniform_capacity: u64 = 4096;
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -307,7 +301,7 @@ impl WgpuRenderer {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uniform_buffer,
                     offset: 0,
-                    size: std::num::NonZeroU64::new(uniform_struct_size),
+                    size: core::num::NonZeroU64::new(uniform_struct_size),
                 }),
             }],
         });
@@ -340,7 +334,7 @@ impl WgpuRenderer {
             surface_config: None,
             surface_format,
             alpha_mode,
-            window,
+            present_mode: wgpu::PresentMode::Fifo,
             width: w,
             height: h,
             offscreen_color: None,
@@ -390,7 +384,7 @@ impl WgpuRenderer {
                 format: self.surface_format,
                 width: w,
                 height: h,
-                present_mode: wgpu::PresentMode::Fifo,
+                present_mode: self.present_mode,
                 desired_maximum_frame_latency: 2,
                 alpha_mode: self.alpha_mode,
                 view_formats: vec![],
@@ -438,6 +432,16 @@ impl WgpuRenderer {
         });
         self.depth_view = Some(depth_tex.create_view(&wgpu::TextureViewDescriptor::default()));
         self.depth_texture = Some(depth_tex);
+    }
+    pub fn set_swap_interval(&mut self, interval: i32) {
+        self.present_mode = if interval == 0 {
+            wgpu::PresentMode::Immediate
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+        if self.surface.is_some() {
+            self.resize(self.width, self.height);
+        }
     }
 
     pub fn get_or_create_pipeline(&mut self, key: &PipelineKey) -> &wgpu::RenderPipeline {
@@ -543,7 +547,7 @@ impl WgpuRenderer {
                         entry_point: Some("vs_main"),
                         compilation_options: Default::default(),
                         buffers: &[Some(wgpu::VertexBufferLayout {
-                            array_stride: std::mem::size_of::<VertexData>() as u64,
+                            array_stride: core::mem::size_of::<VertexData>() as u64,
                             step_mode: wgpu::VertexStepMode::Vertex,
                             attributes: &[
                                 wgpu::VertexAttribute {
@@ -600,7 +604,7 @@ impl WgpuRenderer {
         self.pipelines.get(key).unwrap()
     }
 
-    pub fn ensure_frame_target(&mut self) -> Result<wgpu::TextureView, String> {
+    pub fn ensure_frame_target(&mut self) -> Result<wgpu::TextureView, AngleWgpuError> {
         if self.surface.is_some() {
             if self.current_surface_texture.is_none() {
                 let res = self.surface.as_ref().unwrap().get_current_texture();
@@ -609,7 +613,9 @@ impl WgpuRenderer {
                     | wgpu::CurrentSurfaceTexture::Suboptimal(tex) => {
                         self.current_surface_texture = Some(tex);
                     }
-                    wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                    wgpu::CurrentSurfaceTexture::Lost
+                    | wgpu::CurrentSurfaceTexture::Outdated
+                    | wgpu::CurrentSurfaceTexture::Timeout => {
                         self.resize(self.width, self.height);
                         let res2 = self.surface.as_ref().unwrap().get_current_texture();
                         if let wgpu::CurrentSurfaceTexture::Success(tex)
@@ -617,12 +623,16 @@ impl WgpuRenderer {
                         {
                             self.current_surface_texture = Some(tex);
                         } else {
-                            return Err(
-                                "Failed to acquire surface texture after resize".to_string()
-                            );
+                            return Err(AngleWgpuError::SurfaceAcquire(
+                                "failed to acquire surface texture after resize",
+                            ));
                         }
                     }
-                    _ => return Err("Failed to acquire surface texture".to_string()),
+                    _ => {
+                        return Err(AngleWgpuError::SurfaceAcquire(
+                            "failed to acquire surface texture",
+                        ))
+                    }
                 }
             }
             let tex = self.current_surface_texture.as_ref().unwrap();
@@ -632,7 +642,7 @@ impl WgpuRenderer {
         } else if let Some(view) = &self.offscreen_color_view {
             Ok(view.clone())
         } else {
-            Err("No render target available".to_string())
+            Err(AngleWgpuError::NoSurface)
         }
     }
 
@@ -668,8 +678,8 @@ impl WgpuRenderer {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &self.uniform_buffer,
                     offset: 0,
-                    size: std::num::NonZeroU64::new(
-                        std::mem::size_of::<FixedFunctionUniforms>() as u64
+                    size: core::num::NonZeroU64::new(
+                        core::mem::size_of::<FixedFunctionUniforms>() as u64
                     ),
                 }),
             }],
@@ -746,7 +756,7 @@ impl WgpuRenderer {
         // Append into the reused vertex/index scratch pools instead of
         // allocating a fresh GPU buffer per draw call (was the dominant
         // per-frame cost: every chunk face layer allocated two buffers).
-        let vertex_bytes = (vertices.len() * std::mem::size_of::<VertexData>()) as u64;
+        let vertex_bytes = (vertices.len() * core::mem::size_of::<VertexData>()) as u64;
         if self.vertex_scratch_offset + vertex_bytes > self.vertex_scratch_capacity {
             self.grow_vertex_scratch(self.vertex_scratch_offset + vertex_bytes);
         }
@@ -759,7 +769,7 @@ impl WgpuRenderer {
         self.vertex_scratch_offset += vertex_bytes;
 
         let index_range = indices.map(|idx| {
-            let index_bytes = (idx.len() * std::mem::size_of::<u32>()) as u64;
+            let index_bytes = (idx.len() * core::mem::size_of::<u32>()) as u64;
             if self.index_scratch_offset + index_bytes > self.index_scratch_capacity {
                 self.grow_index_scratch(self.index_scratch_offset + index_bytes);
             }
@@ -821,7 +831,7 @@ impl WgpuRenderer {
                 label: Some("Frame Encoder"),
             });
 
-        let ops = std::mem::take(&mut self.frame_ops);
+        let ops = core::mem::take(&mut self.frame_ops);
         let mut i = 0;
         while i < ops.len() {
             let (clear_color, clear_depth) = match &ops[i] {
@@ -942,13 +952,13 @@ impl WgpuRenderer {
                     pass.draw_indexed(0..count, 0, 0..1);
                 } else {
                     let vertex_count =
-                        (d.vertex_bytes / std::mem::size_of::<VertexData>() as u64) as u32;
+                        (d.vertex_bytes / core::mem::size_of::<VertexData>() as u64) as u32;
                     pass.draw(0..vertex_count, 0..1);
                 }
             }
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.submit(core::iter::once(encoder.finish()));
         // Safe to reuse immediately: wgpu queue operations (writes and
         // submits) execute in issue order on the same queue, so the next
         // frame's `write_buffer` calls at these same offsets are
@@ -959,20 +969,13 @@ impl WgpuRenderer {
         self.uniform_used = 0;
     }
 
-    pub fn swap_buffers(&mut self) -> Result<(), String> {
+    pub fn swap_buffers(&mut self) -> Result<(), AngleWgpuError> {
         if self.current_surface_texture.is_none() && self.surface.is_some() {
             self.clear(true, true, false);
         }
         self.flush();
-        if let Some(window) = &self.window {
-            window.pre_present_notify();
-        }
         if let Some(frame) = self.current_surface_texture.take() {
             self.queue.present(frame);
-        }
-
-        if let Some(window) = &self.window {
-            window.request_redraw();
         }
         Ok(())
     }

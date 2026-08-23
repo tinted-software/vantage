@@ -1,24 +1,37 @@
-//! ANGLE alternative forwarding mixed OpenGL ES 1.1 / 2.0 and EGL calls to wgpu and winit.
+//! ANGLE alternative forwarding mixed OpenGL ES 1.1 / 2.0 and EGL calls to wgpu.
+//!
+//! Windowing (SDL3/winit/etc.) lives in user-facing code: surfaces are
+//! created from raw X11/Wayland handles via EGL
+//! (`angle_wgpu_create_native_window_surface`).
 #![allow(non_snake_case, non_camel_case_types)]
+#![no_std]
+extern crate alloc;
 
 pub mod display_list;
 pub mod egl;
+pub mod error;
 pub mod gl_context;
-pub mod image;
+pub mod glvnd;
+// TODO: re-enable once we have our own PNG decoder based on zlib-rs
+// (zune-png does not build fully no_std).
+// pub mod image;
 pub mod matrix;
 pub mod renderer;
 pub mod shader;
+pub mod sync;
 pub mod texture;
 pub mod types;
-pub mod winit_app;
 
+pub use crate::error::AngleWgpuError;
 pub use crate::types::*;
 
 use crate::display_list::VertexData;
 use crate::egl::*;
 use crate::gl_context::GlContext;
 use crate::matrix::MatrixMode;
-use std::ffi::{c_char, c_void};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::ffi::{c_char, c_void};
 
 /// Convert a GLES 16.16 `GLfixed` value to float. Enum-valued pnames keep the
 /// integer as-is (see `glFogx`).
@@ -32,31 +45,9 @@ fn clampx_to_float(x: GLclampx) -> GLclampf {
     (x as GLfloat / 65536.0).clamp(0.0, 1.0)
 }
 
-/// Forwards `log`/wgpu-hal diagnostics to stderr. Without a registered
-/// logger, wgpu silently discards `log::debug!`/`log::warn!` calls (e.g. the
-/// backend-init errors behind `FailedToCreateSurfaceForAnyBackend`), which
-/// otherwise looks identical to "no error, just no picture".
-struct StderrLogger;
-impl log::Log for StderrLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
-    fn log(&self, record: &log::Record) {
-        eprintln!(
-            "[{}] {}: {}",
-            record.level(),
-            record.target(),
-            record.args()
-        );
-    }
-    fn flush(&self) {}
-}
-static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
-pub fn init_logging() {
-    LOGGER_INIT.call_once(|| {
-        let _ = log::set_logger(&StderrLogger).map(|()| log::set_max_level(log::LevelFilter::Warn));
-    });
-}
+// Diagnostics: this crate has no logger and prints nothing. Failures are
+// reported through typed `AngleWgpuError`s internally and through the
+// EGL/GL error state (`eglGetError` / `glGetError`) at the C ABI boundary.
 // ============================================================================
 // Internal Helper: Helper to execute with current GL context
 // ============================================================================
@@ -237,7 +228,7 @@ pub unsafe extern "C" fn glMultMatrixf(m: *const GLfloat) {
     }
     with_context(|ctx| {
         let mut data = [0.0f32; 16];
-        data.copy_from_slice(std::slice::from_raw_parts(m, 16));
+        data.copy_from_slice(core::slice::from_raw_parts(m, 16));
         let mat = crate::matrix::Mat4::from_array(data);
         ctx.current_matrix_stack().mult_matrix(&mat);
     });
@@ -250,7 +241,7 @@ pub unsafe extern "C" fn glLoadMatrixf(m: *const GLfloat) {
     }
     with_context(|ctx| {
         let mut data = [0.0f32; 16];
-        data.copy_from_slice(std::slice::from_raw_parts(m, 16));
+        data.copy_from_slice(core::slice::from_raw_parts(m, 16));
         let mat = crate::matrix::Mat4::from_array(data);
         ctx.current_matrix_stack().load_matrix(&mat);
     });
@@ -341,7 +332,7 @@ pub unsafe extern "C" fn glClientActiveTexture(texture: GLenum) {
     with_context(|ctx| {
         let idx = (texture.saturating_sub(GL_TEXTURE0)) as usize;
         if idx < 8 {
-            ctx.texture_manager.lock().client_active_unit = idx;
+            ctx.texture_manager.client_active_unit = idx;
         }
     });
 }
@@ -430,7 +421,7 @@ pub unsafe extern "C" fn glBegin(mode: GLenum) {
 pub unsafe extern "C" fn glEnd() {
     with_context(|ctx| {
         if let Some(mode) = ctx.immediate_mode.take() {
-            let verts = std::mem::take(&mut ctx.immediate_vertices);
+            let verts = core::mem::take(&mut ctx.immediate_vertices);
             ctx.draw_vertex_data(mode, &verts, None);
         }
     });
@@ -618,7 +609,7 @@ pub unsafe extern "C" fn glGenTextures(n: GLsizei, textures: *mut GLuint) {
         return;
     }
     with_context(|ctx| {
-        let mut tm = ctx.texture_manager.lock();
+        let tm = &mut ctx.texture_manager;
         let ids = tm.gen_textures(n as usize);
         for (i, id) in ids.iter().enumerate() {
             *textures.add(i) = *id;
@@ -632,8 +623,8 @@ pub unsafe extern "C" fn glDeleteTextures(n: GLsizei, textures: *const GLuint) {
         return;
     }
     with_context(|ctx| {
-        let slice = std::slice::from_raw_parts(textures, n as usize);
-        ctx.texture_manager.lock().delete_textures(slice);
+        let slice = core::slice::from_raw_parts(textures, n as usize);
+        ctx.texture_manager.delete_textures(slice);
     });
 }
 
@@ -643,7 +634,7 @@ pub unsafe extern "C" fn glBindTexture(target: GLenum, texture: GLuint) {
         if let Some(list) = &mut ctx.active_display_list {
             list.push_op(crate::display_list::DisplayListOp::BindTexture(texture));
         }
-        ctx.texture_manager.lock().bind_texture(target, texture);
+        ctx.texture_manager.bind_texture(target, texture);
     });
 }
 
@@ -663,12 +654,12 @@ pub unsafe extern "C" fn glTexImage2D(
         return;
     }
     with_context(|ctx| {
-        let mut tm = ctx.texture_manager.lock();
+        let tm = &mut ctx.texture_manager;
         if let Some(tex) = tm.get_current_texture_mut() {
             let data_slice = if !pixels.is_null() {
                 let num_pixels = (width * height) as usize;
                 let bpp = crate::texture::bytes_per_pixel(format, type_);
-                Some(std::slice::from_raw_parts(
+                Some(core::slice::from_raw_parts(
                     pixels as *const u8,
                     num_pixels * bpp,
                 ))
@@ -705,11 +696,11 @@ pub unsafe extern "C" fn glTexSubImage2D(
         return;
     }
     with_context(|ctx| {
-        let mut tm = ctx.texture_manager.lock();
+        let tm = &mut ctx.texture_manager;
         if let Some(tex) = tm.get_current_texture_mut() {
             let num_pixels = (width * height) as usize;
             let bpp = crate::texture::bytes_per_pixel(format, type_);
-            let data_slice = std::slice::from_raw_parts(pixels as *const u8, num_pixels * bpp);
+            let data_slice = core::slice::from_raw_parts(pixels as *const u8, num_pixels * bpp);
             tex.set_sub_image_data(
                 level as u32,
                 xoffset as u32,
@@ -727,7 +718,7 @@ pub unsafe extern "C" fn glTexSubImage2D(
 #[no_mangle]
 pub unsafe extern "C" fn glTexParameteri(_target: GLenum, pname: GLenum, param: GLint) {
     with_context(|ctx| {
-        let mut tm = ctx.texture_manager.lock();
+        let tm = &mut ctx.texture_manager;
         if let Some(tex) = tm.get_current_texture_mut() {
             match pname {
                 GL_TEXTURE_MIN_FILTER => tex.min_filter = param as GLenum,
@@ -765,7 +756,7 @@ pub unsafe extern "C" fn glActiveTexture(texture: GLenum) {
     with_context(|ctx| {
         let idx = (texture.saturating_sub(GL_TEXTURE0)) as usize;
         if idx < 8 {
-            ctx.texture_manager.lock().active_unit = idx;
+            ctx.texture_manager.active_unit = idx;
         }
     });
 }
@@ -820,7 +811,7 @@ pub unsafe extern "C" fn glGetTexLevelParameteri(
         return;
     }
     with_context(|ctx| {
-        let tm = ctx.texture_manager.lock();
+        let tm = &ctx.texture_manager;
         if let Some(tex) = tm.get_current_texture() {
             match pname {
                 GL_TEXTURE_WIDTH => *params = tex.width as GLint,
@@ -1327,7 +1318,7 @@ pub unsafe extern "C" fn glReadPixels(
     }
     // Fill with opaque black by default if not read back
     let size = (width * height * 4) as usize;
-    std::ptr::write_bytes(pixels as *mut u8, 0, size);
+    core::ptr::write_bytes(pixels as *mut u8, 0, size);
 }
 
 #[no_mangle]
@@ -1663,7 +1654,7 @@ pub unsafe extern "C" fn glBufferData(
         let nbytes = size as usize;
         let mut bytes = vec![0u8; nbytes];
         if !data.is_null() && nbytes > 0 {
-            std::ptr::copy_nonoverlapping(data as *const u8, bytes.as_mut_ptr(), nbytes);
+            core::ptr::copy_nonoverlapping(data as *const u8, bytes.as_mut_ptr(), nbytes);
         }
         ctx.buffers.insert(binding, bytes);
     });
@@ -1703,7 +1694,7 @@ pub unsafe extern "C" fn glBufferSubData(
         if end > buf.len() {
             buf.resize(end, 0);
         }
-        std::ptr::copy_nonoverlapping(
+        core::ptr::copy_nonoverlapping(
             data as *const u8,
             buf.as_mut_ptr().add(start),
             size as usize,
@@ -2026,6 +2017,11 @@ pub unsafe extern "C" fn eglGetError() -> EGLint {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn eglQueryString(dpy: EGLDisplay, name: EGLint) -> *const c_char {
+    egl_query_string(dpy, name)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn eglGetProcAddress(
     procname: *const c_char,
 ) -> __eglMustCastToProperFunctionPointerType {
@@ -2148,14 +2144,15 @@ pub fn get_gl_proc_address(name: &str) -> __eglMustCastToProperFunctionPointerTy
         "eglCreateWindowSurface" => eglCreateWindowSurface as *const (),
         "eglCreateContext" => eglCreateContext as *const (),
         "eglMakeCurrent" => eglMakeCurrent as *const (),
-        "eglSwapBuffers" => eglSwapBuffers as *const (),
+        "eglSwapInterval" => eglSwapInterval as *const (),
+        "eglQueryString" => eglQueryString as *const (),
         "eglGetProcAddress" => eglGetProcAddress as *const (),
-        _ => std::ptr::null(),
+        _ => core::ptr::null(),
     };
 
     if ptr.is_null() {
         None
     } else {
-        Some(unsafe { std::mem::transmute(ptr) })
+        Some(unsafe { core::mem::transmute(ptr) })
     }
 }

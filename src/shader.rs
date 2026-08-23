@@ -1,6 +1,8 @@
 //! Fixed-function WGSL shader generation and GLES2 shader/program emulation.
 
-use std::collections::HashMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+use hashbrown::HashMap;
 
 /// Memory layout for fixed-function uniform buffer (must match WGSL alignment rules).
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

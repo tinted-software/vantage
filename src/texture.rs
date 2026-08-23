@@ -1,7 +1,9 @@
 //! OpenGL texture state management and wgpu texture/sampler synchronization.
 
 use crate::types::*;
-use std::collections::HashMap;
+use alloc::vec;
+use alloc::vec::Vec;
+use hashbrown::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct TextureObject {

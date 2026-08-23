@@ -81,6 +81,7 @@ pub const EGL_BAD_NATIVE_PIXMAP: EGLint = 0x300A;
 pub const EGL_BAD_NATIVE_WINDOW: EGLint = 0x300B;
 pub const EGL_BAD_PARAMETER: EGLint = 0x300C;
 pub const EGL_BAD_SURFACE: EGLint = 0x300D;
+pub const EGL_DONT_CARE: EGLint = -1;
 pub const EGL_CONTEXT_LOST: EGLint = 0x300E;
 
 pub const EGL_BUFFER_SIZE: EGLint = 0x3020;

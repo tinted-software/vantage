@@ -1,4 +1,5 @@
 target/
 .DS_Store
 .cache/
-/a.out
+/demo
+/demo_headless

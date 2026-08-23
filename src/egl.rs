@@ -1,24 +1,24 @@
 //! EGL 1.4 API implementation and context/surface management.
 #![allow(unused_imports, dead_code)]
 use crate::display_list::DisplayListRegistry;
+use crate::error::AngleWgpuError;
 use crate::gl_context::GlContext;
+use crate::glvnd::{current_native_platform, native_display_ptr, NativePlatform};
 use crate::renderer::WgpuRenderer;
+use crate::sync::Mutex;
 use crate::texture::TextureManager;
 use crate::types::*;
-use parking_lot::Mutex;
+use alloc::collections::BTreeMap as HashMap;
+use alloc::sync::Arc;
+use core::ffi::{c_void, CStr};
+use core::future::Future;
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicU32, Ordering};
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
-    RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, WindowHandle, XlibDisplayHandle,
-    XlibWindowHandle,
+    RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, Win32WindowHandle, WindowHandle,
+    WindowsDisplayHandle, XlibDisplayHandle, XlibWindowHandle,
 };
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ffi::{c_void, CStr};
-use std::future::Future;
-use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
-
 #[derive(Clone, Copy, Debug)]
 struct ForeignNativeWindow {
     kind: u32,
@@ -41,6 +41,7 @@ impl HasDisplayHandle for ForeignNativeWindow {
                 let display = NonNull::new(self.display).ok_or(HandleError::Unavailable)?;
                 RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display))
             }
+            ANGLE_WGPU_NATIVE_WIN32 => RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
             _ => return Err(HandleError::NotSupported),
         };
         Ok(unsafe { DisplayHandle::borrow_raw(raw) })
@@ -56,6 +57,20 @@ impl HasWindowHandle for ForeignNativeWindow {
                     NonNull::new(self.window as *mut c_void).ok_or(HandleError::Unavailable)?;
                 RawWindowHandle::Wayland(WaylandWindowHandle::new(surface))
             }
+            ANGLE_WGPU_NATIVE_WIN32 => {
+                let hwnd =
+                    NonNull::new(self.window as *mut c_void).ok_or(HandleError::Unavailable)?;
+                let hinstance = NonNull::new(self.display).ok_or(HandleError::Unavailable)?;
+                let hwnd_nz: core::num::NonZeroIsize =
+                    core::num::NonZeroIsize::new(hwnd.as_ptr() as isize)
+                        .ok_or(HandleError::Unavailable)?;
+                let hinst_nz: core::num::NonZeroIsize =
+                    core::num::NonZeroIsize::new(hinstance.as_ptr() as isize)
+                        .ok_or(HandleError::Unavailable)?;
+                let mut handle = Win32WindowHandle::new(hwnd_nz);
+                handle.hinstance = Some(hinst_nz);
+                RawWindowHandle::Win32(handle)
+            }
             _ => return Err(HandleError::NotSupported),
         };
         Ok(unsafe { WindowHandle::borrow_raw(raw) })
@@ -63,16 +78,15 @@ impl HasWindowHandle for ForeignNativeWindow {
 }
 
 pub fn block_on<F: Future>(mut future: F) -> F::Output {
-    use std::pin::Pin;
-    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-
+    use core::pin::Pin;
+    use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
     fn noop_clone(_: *const ()) -> RawWaker {
         noop_raw_waker()
     }
     fn noop(_: *const ()) {}
     fn noop_raw_waker() -> RawWaker {
         static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
-        RawWaker::new(std::ptr::null(), &VTABLE)
+        RawWaker::new(core::ptr::null(), &VTABLE)
     }
 
     let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
@@ -82,7 +96,9 @@ pub fn block_on<F: Future>(mut future: F) -> F::Output {
     loop {
         match future.as_mut().poll(&mut cx) {
             Poll::Ready(result) => return result,
-            Poll::Pending => std::thread::yield_now(),
+            // no_std: no scheduler to yield to; busy-wait until another
+            // thread completes the future.
+            Poll::Pending => core::hint::spin_loop(),
         }
     }
 }
@@ -103,7 +119,6 @@ pub struct EglDisplayState {
     pub initialized: bool,
     pub surfaces: HashMap<u32, Arc<Mutex<EglSurfaceState>>>,
     pub contexts: HashMap<u32, Arc<Mutex<EglContextState>>>,
-    pub shared_textures: Arc<Mutex<TextureManager>>,
     pub shared_display_lists: Arc<DisplayListRegistry>,
     next_surface_id: AtomicU32,
     next_context_id: AtomicU32,
@@ -115,7 +130,6 @@ impl Default for EglDisplayState {
             initialized: false,
             surfaces: HashMap::new(),
             contexts: HashMap::new(),
-            shared_textures: Arc::new(Mutex::new(TextureManager::new())),
             shared_display_lists: Arc::new(DisplayListRegistry::new()),
             next_surface_id: AtomicU32::new(1),
             next_context_id: AtomicU32::new(1),
@@ -155,13 +169,15 @@ static LAST_EGL_ERROR: Mutex<EGLint> = Mutex::new(EGL_SUCCESS);
 // current on any thread" is safe and matches the game's actual usage.
 static LAST_ACTIVE_CONTEXT: Mutex<Option<Arc<Mutex<GlContext>>>> = Mutex::new(None);
 
-thread_local! {
-    pub static CURRENT_CONTEXT: RefCell<Option<Arc<Mutex<GlContext>>>> = const { RefCell::new(None) };
-    pub static CURRENT_SURFACE: RefCell<Option<Arc<Mutex<EglSurfaceState>>>> = const { RefCell::new(None) };
-}
+// no_std note: `std::thread_local!` is unavailable, and the target usage
+// (a single implicit GL context shared across threads, as on the consoles
+// this was ported from) makes globally-current state the correct semantics
+// anyway. Both slots are plain lock-protected globals.
+pub static CURRENT_CONTEXT: Mutex<Option<Arc<Mutex<GlContext>>>> = Mutex::new(None);
+pub static CURRENT_SURFACE: Mutex<Option<Arc<Mutex<EglSurfaceState>>>> = Mutex::new(None);
 
 pub fn get_current_gl_context() -> Option<Arc<Mutex<GlContext>>> {
-    if let Some(ctx) = CURRENT_CONTEXT.with(|c| c.borrow().clone()) {
+    if let Some(ctx) = CURRENT_CONTEXT.lock().clone() {
         return Some(ctx);
     }
     LAST_ACTIVE_CONTEXT.lock().clone()
@@ -184,7 +200,6 @@ pub fn get_or_create_display() -> Arc<Mutex<EglDisplayState>> {
 // ============================================================================
 
 pub unsafe fn egl_get_display(_display_id: NativeDisplayType) -> EGLDisplay {
-    crate::init_logging();
     let dpy = get_or_create_display();
     Arc::into_raw(dpy) as EGLDisplay
 }
@@ -211,7 +226,7 @@ pub unsafe fn egl_initialize(
         }
         EGL_TRUE
     };
-    std::mem::forget(dpy_arc);
+    core::mem::forget(dpy_arc);
     res
 }
 
@@ -228,7 +243,7 @@ pub unsafe fn egl_terminate(dpy: EGLDisplay) -> EGLBoolean {
         d.contexts.clear();
         d.surfaces.clear();
     }
-    std::mem::forget(dpy_arc);
+    core::mem::forget(dpy_arc);
     EGL_TRUE
 }
 
@@ -249,18 +264,105 @@ pub unsafe fn egl_get_configs(
 
 pub unsafe fn egl_choose_config(
     _dpy: EGLDisplay,
-    _attrib_list: *const EGLint,
+    attrib_list: *const EGLint,
     configs: *mut EGLConfig,
     config_size: EGLint,
     num_config: *mut EGLint,
 ) -> EGLBoolean {
-    if !num_config.is_null() {
-        *num_config = 1;
+    if num_config.is_null() {
+        set_egl_error(EGL_BAD_PARAMETER);
+        return EGL_FALSE;
     }
+
+    // The single exported config. Values must stay consistent with
+    // `egl_get_config_attrib`, which is the query side of the same contract.
+    const CONFIG_ID: EGLint = 1;
+    const SURFACE_TYPE_VAL: EGLint = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
+    const RENDERABLE_TYPE_VAL: EGLint = EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT;
+    // Match kind: 0 = exact, 1 = at-least (config value >= requested),
+    // 2 = bitmask (every requested bit set in the config's value).
+    const CONFIG_ATTRIBS: &[(EGLint, EGLint, u8)] = &[
+        (EGL_BUFFER_SIZE, 32, 1),
+        (EGL_RED_SIZE, 8, 1),
+        (EGL_GREEN_SIZE, 8, 1),
+        (EGL_BLUE_SIZE, 8, 1),
+        (EGL_ALPHA_SIZE, 8, 1),
+        (EGL_DEPTH_SIZE, 24, 1),
+        (EGL_STENCIL_SIZE, 8, 1),
+        (EGL_SAMPLES, 0, 1),
+        (EGL_SAMPLE_BUFFERS, 0, 1),
+        (EGL_LUMINANCE_SIZE, 0, 1),
+        (EGL_ALPHA_MASK_SIZE, 0, 1),
+        (EGL_MAX_PBUFFER_WIDTH, 16384, 1),
+        (EGL_MAX_PBUFFER_HEIGHT, 16384, 1),
+        (EGL_MAX_PBUFFER_PIXELS, 16384 * 16384, 1),
+        (EGL_LEVEL, 0, 0),
+        (EGL_CONFIG_CAVEAT, EGL_NONE, 0),
+        (EGL_CONFIG_ID, CONFIG_ID, 0),
+        (EGL_COLOR_BUFFER_TYPE, EGL_RGB_BUFFER, 0),
+        (EGL_NATIVE_RENDERABLE, EGL_FALSE as EGLint, 0),
+        (EGL_NATIVE_VISUAL_ID, 0, 0),
+        (EGL_NATIVE_VISUAL_TYPE, 0, 0),
+        (EGL_BIND_TO_TEXTURE_RGB, EGL_TRUE as EGLint, 0),
+        (EGL_BIND_TO_TEXTURE_RGBA, EGL_TRUE as EGLint, 0),
+        (EGL_SURFACE_TYPE, SURFACE_TYPE_VAL, 2),
+        (EGL_RENDERABLE_TYPE, RENDERABLE_TYPE_VAL, 2),
+        (EGL_CONFORMANT, RENDERABLE_TYPE_VAL, 2),
+    ];
+
+    if !attrib_list.is_null() {
+        let mut ptr = attrib_list;
+        while *ptr != EGL_NONE {
+            let attr = *ptr;
+            let want = *ptr.add(1);
+            ptr = ptr.add(2);
+            if attr == EGL_DONT_CARE || want == EGL_DONT_CARE {
+                continue;
+            }
+            let Some(&(_, have, kind)) = CONFIG_ATTRIBS.iter().find(|&&(a, _, _)| a == attr) else {
+                set_egl_error(EGL_BAD_ATTRIBUTE);
+                *num_config = 0;
+                return EGL_FALSE;
+            };
+            let ok = match kind {
+                1 => have >= want,
+                2 => (have & want) == want,
+                _ => have == want,
+            };
+            if !ok {
+                *num_config = 0;
+                return EGL_TRUE;
+            }
+        }
+    }
+
+    *num_config = 1;
     if !configs.is_null() && config_size > 0 {
-        *configs = 1 as EGLConfig;
+        *configs = CONFIG_ID as EGLConfig;
     }
     EGL_TRUE
+}
+static STRING_VENDOR: &[u8] = b"angle_wgpu\0";
+static STRING_VERSION: &[u8] = b"1.4 angle_wgpu EGL 1.4\0";
+static STRING_CLIENT_APIS: &[u8] = b"OpenGL_ES \0";
+static STRING_EXTENSIONS: &[u8] = b"EGL_KHR_create_context EGL_KHR_surfaceless_context \
+EGL_KHR_image_base EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_KHR_get_all_proc_addresses\0";
+static CLIENT_EXTENSIONS: &[u8] = b"EGL_EXT_platform_base EGL_EXT_platform_x11 \
+EGL_EXT_platform_wayland EGL_MESA_platform_surfaceless \
+EGL_KHR_client_get_all_proc_addresses\0";
+
+/// Returns a static NUL-terminated string, or null for unknown queries.
+pub unsafe fn egl_query_string(dpy: EGLDisplay, name: EGLint) -> *const core::ffi::c_char {
+    let bytes: &[u8] = match name {
+        EGL_VENDOR => STRING_VENDOR,
+        EGL_VERSION => STRING_VERSION,
+        EGL_CLIENT_APIS => STRING_CLIENT_APIS,
+        // Client extensions are display-independent.
+        EGL_EXTENSIONS if dpy.is_null() => CLIENT_EXTENSIONS,
+        EGL_EXTENSIONS => STRING_EXTENSIONS,
+        _ => return core::ptr::null(),
+    };
+    bytes.as_ptr() as *const core::ffi::c_char
 }
 
 pub unsafe fn egl_get_config_attrib(
@@ -322,11 +424,40 @@ pub unsafe fn egl_create_window_surface(
         d.next_surface_id.fetch_add(1, Ordering::SeqCst)
     };
 
-    let renderer = match block_on(WgpuRenderer::new_headless(width, height)) {
-        Ok(r) => Some(Arc::new(Mutex::new(r))),
-        Err(e) => {
-            log::warn!("WgpuRenderer headless fallback: {e}");
-            None
+    // A real on-screen window: when the display came through glvnd we know
+    // the window system (and its Display*/wl_surface*) from
+    // `getPlatformDisplay`, so build a wgpu surface that actually presents.
+    // Without that context (e.g. the pbuffer path passes win == null), fall
+    // back to a headless offscreen renderer.
+    let renderer = if !win.is_null() && native_display_ptr() != core::ptr::null_mut() {
+        let kind = match current_native_platform() {
+            NativePlatform::X11 => ANGLE_WGPU_NATIVE_X11,
+            NativePlatform::Wayland => ANGLE_WGPU_NATIVE_WAYLAND,
+            NativePlatform::None => 0,
+        };
+        let foreign = ForeignNativeWindow {
+            kind,
+            display: native_display_ptr(),
+            window: win as u64,
+            screen: 0,
+        };
+        match renderer_from_native_window(foreign, width.max(1), height.max(1)) {
+            Ok(r) => r,
+            Err(_e) => {
+                set_egl_error(EGL_BAD_ALLOC);
+                return EGL_NO_SURFACE;
+            }
+        }
+    } else {
+        // Headless renderer creation failure fails the surface: without a
+        // renderer nothing would ever present. The error is retrievable via
+        // `eglGetError` (EGL_BAD_ALLOC).
+        match block_on(WgpuRenderer::new_headless(width, height)) {
+            Ok(r) => Arc::new(Mutex::new(r)),
+            Err(_e) => {
+                set_egl_error(EGL_BAD_ALLOC);
+                return EGL_NO_SURFACE;
+            }
         }
     };
 
@@ -335,7 +466,7 @@ pub unsafe fn egl_create_window_surface(
         width,
         height,
         native_window: win,
-        renderer,
+        renderer: Some(renderer),
     }));
 
     {
@@ -344,7 +475,7 @@ pub unsafe fn egl_create_window_surface(
     }
 
     if !dpy.is_null() {
-        std::mem::forget(dpy_arc);
+        core::mem::forget(dpy_arc);
     }
 
     Arc::into_raw(surface_state) as EGLSurface
@@ -354,64 +485,47 @@ fn renderer_from_native_window(
     native: ForeignNativeWindow,
     width: u32,
     height: u32,
-) -> Option<Arc<Mutex<WgpuRenderer>>> {
+) -> Result<Arc<Mutex<WgpuRenderer>>, AngleWgpuError> {
+    use alloc::boxed::Box;
+
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
         Box::new(native),
     ));
 
-    let surface = match instance.create_surface(native) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("[angle_wgpu] create_surface from native window failed: {e:#?}");
-            return None;
-        }
-    };
+    let surface = instance
+        .create_surface(native)
+        .map_err(AngleWgpuError::CreateSurface)?;
 
-    let adapter = match block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: Some(&surface),
         force_fallback_adapter: false,
         apply_limit_buckets: false,
-    })) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("[angle_wgpu] request_adapter failed: {e:?}");
-            return None;
-        }
-    };
+    }))
+    .map_err(AngleWgpuError::RequestAdapter)?;
 
-    let (device, queue) = match block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("angle_wgpu Native Window Device"),
         required_features: wgpu::Features::empty(),
         required_limits: wgpu::Limits::default(),
         memory_hints: wgpu::MemoryHints::default(),
         trace: wgpu::Trace::Off,
         experimental_features: wgpu::ExperimentalFeatures::default(),
-    })) {
-        Ok(dq) => dq,
-        Err(e) => {
-            eprintln!("[angle_wgpu] request_device failed: {e:?}");
-            return None;
-        }
-    };
+        default_queue: wgpu::QueueDescriptor::default(),
+    }))
+    .map_err(AngleWgpuError::RequestDevice)?;
 
-    match WgpuRenderer::new_with_surface(
+    let renderer = WgpuRenderer::new_with_surface(
         instance,
         adapter,
         device,
         queue,
         surface,
-        // No winit window; present still works through the wgpu surface.
-        None,
         width.max(1),
         height.max(1),
-    ) {
-        Ok(r) => Some(Arc::new(Mutex::new(r))),
-        Err(e) => {
-            eprintln!("[angle_wgpu] new_with_surface failed: {e}");
-            None
-        }
-    }
+    )?;
+
+    Ok(Arc::new(Mutex::new(renderer)))
 }
 
 pub unsafe fn egl_create_native_window_surface(
@@ -423,25 +537,37 @@ pub unsafe fn egl_create_native_window_surface(
         return EGL_NO_SURFACE;
     }
     let n = *native;
-    if n.kind != ANGLE_WGPU_NATIVE_X11 && n.kind != ANGLE_WGPU_NATIVE_WAYLAND {
+    if n.kind != ANGLE_WGPU_NATIVE_X11
+        && n.kind != ANGLE_WGPU_NATIVE_WAYLAND
+        && n.kind != ANGLE_WGPU_NATIVE_WIN32
+    {
         set_egl_error(EGL_BAD_PARAMETER);
         return EGL_NO_SURFACE;
     }
 
-    let width = n.width.max(1);
-    let height = n.height.max(1);
+    // SDL demo originally left width/height at 0, which made the renderer
+    // configure a 1x1 swapchain: the 800x600 X11 window then composites as
+    // mostly transparent until a resize reconfigures it to the real size.
+    // Fall back to the window's actual size-derived default when the caller
+    // did not provide one, so the first frame already matches the window.
+    let width = if n.width == 0 { 800 } else { n.width }.max(1);
+    let height = if n.height == 0 { 600 } else { n.height }.max(1);
     let foreign = ForeignNativeWindow {
         kind: n.kind,
         display: n.display,
         window: n.window,
         screen: n.screen,
     };
-
-    let renderer = renderer_from_native_window(foreign, width, height);
-    if renderer.is_none() {
-        set_egl_error(EGL_BAD_NATIVE_WINDOW);
-        return EGL_NO_SURFACE;
-    }
+    let renderer = match renderer_from_native_window(foreign, width, height) {
+        Ok(r) => r,
+        // Surface creation failures are surfaced to the caller via the EGL
+        // error state (retrievable with `eglGetError`); the underlying
+        // `AngleWgpuError` carries the wgpu-level details.
+        Err(_e) => {
+            set_egl_error(EGL_BAD_NATIVE_WINDOW);
+            return EGL_NO_SURFACE;
+        }
+    };
 
     let dpy_arc = if !dpy.is_null() {
         Arc::from_raw(dpy as *const Mutex<EglDisplayState>)
@@ -459,7 +585,7 @@ pub unsafe fn egl_create_native_window_surface(
         width,
         height,
         native_window: n.window as NativeWindowType,
-        renderer,
+        renderer: Some(renderer),
     }));
 
     {
@@ -468,7 +594,7 @@ pub unsafe fn egl_create_native_window_surface(
     }
 
     if !dpy.is_null() {
-        std::mem::forget(dpy_arc);
+        core::mem::forget(dpy_arc);
     }
 
     Arc::into_raw(surface_state) as EGLSurface
@@ -479,7 +605,7 @@ pub unsafe fn egl_create_pbuffer_surface(
     _config: EGLConfig,
     attrib_list: *const EGLint,
 ) -> EGLSurface {
-    egl_create_window_surface(dpy, _config, std::ptr::null_mut(), attrib_list)
+    egl_create_window_surface(dpy, _config, core::ptr::null_mut(), attrib_list)
 }
 
 pub unsafe fn egl_destroy_surface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean {
@@ -492,7 +618,7 @@ pub unsafe fn egl_destroy_surface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBo
     if !dpy.is_null() {
         let dpy_arc = Arc::from_raw(dpy as *const Mutex<EglDisplayState>);
         dpy_arc.lock().surfaces.remove(&id);
-        std::mem::forget(dpy_arc);
+        core::mem::forget(dpy_arc);
     }
 
     EGL_TRUE
@@ -510,11 +636,10 @@ pub unsafe fn egl_create_context(
         get_or_create_display()
     };
 
-    let (id, shared_textures, shared_lists) = {
+    let (id, shared_lists) = {
         let d = dpy_arc.lock();
         (
             d.next_context_id.fetch_add(1, Ordering::SeqCst),
-            d.shared_textures.clone(),
             d.shared_display_lists.clone(),
         )
     };
@@ -522,7 +647,7 @@ pub unsafe fn egl_create_context(
     let gl_ctx = Arc::new(Mutex::new(GlContext::new(
         id,
         None,
-        shared_textures,
+        TextureManager::new(),
         shared_lists,
     )));
     let ctx_state = Arc::new(Mutex::new(EglContextState {
@@ -536,7 +661,7 @@ pub unsafe fn egl_create_context(
     }
 
     if !dpy.is_null() {
-        std::mem::forget(dpy_arc);
+        core::mem::forget(dpy_arc);
     }
 
     Arc::into_raw(ctx_state) as EGLContext
@@ -552,7 +677,7 @@ pub unsafe fn egl_destroy_context(dpy: EGLDisplay, ctx: EGLContext) -> EGLBoolea
     if !dpy.is_null() {
         let dpy_arc = Arc::from_raw(dpy as *const Mutex<EglDisplayState>);
         dpy_arc.lock().contexts.remove(&id);
-        std::mem::forget(dpy_arc);
+        core::mem::forget(dpy_arc);
     }
 
     EGL_TRUE
@@ -565,14 +690,14 @@ pub unsafe fn egl_make_current(
     ctx: EGLContext,
 ) -> EGLBoolean {
     if ctx.is_null() {
-        CURRENT_CONTEXT.with(|c| *c.borrow_mut() = None);
-        CURRENT_SURFACE.with(|s| *s.borrow_mut() = None);
+        *CURRENT_CONTEXT.lock() = None;
+        *CURRENT_SURFACE.lock() = None;
         return EGL_TRUE;
     }
 
     let ctx_arc = Arc::from_raw(ctx as *const Mutex<EglContextState>);
     let gl_ctx = ctx_arc.lock().gl_context.clone();
-    std::mem::forget(ctx_arc);
+    core::mem::forget(ctx_arc);
 
     if !draw.is_null() {
         let surf_arc = Arc::from_raw(draw as *const Mutex<EglSurfaceState>);
@@ -580,7 +705,7 @@ pub unsafe fn egl_make_current(
             let s = surf_arc.lock();
             (s.width, s.height, s.renderer.clone())
         };
-        std::mem::forget(surf_arc.clone());
+        core::mem::forget(surf_arc.clone());
 
         {
             let mut gl = gl_ctx.lock();
@@ -589,32 +714,28 @@ pub unsafe fn egl_make_current(
             gl.scissor = (0, 0, w as i32, h as i32);
         }
 
-        CURRENT_SURFACE.with(|s| *s.borrow_mut() = Some(surf_arc));
+        *CURRENT_SURFACE.lock() = Some(surf_arc);
     }
 
     *LAST_ACTIVE_CONTEXT.lock() = Some(gl_ctx.clone());
-    CURRENT_CONTEXT.with(|c| *c.borrow_mut() = Some(gl_ctx));
+    *CURRENT_CONTEXT.lock() = Some(gl_ctx);
     EGL_TRUE
 }
 
 pub unsafe fn egl_get_current_context() -> EGLContext {
-    CURRENT_CONTEXT.with(|c| {
-        if let Some(ctx) = c.borrow().as_ref() {
-            Arc::as_ptr(ctx) as EGLContext
-        } else {
-            EGL_NO_CONTEXT
-        }
-    })
+    let cur = CURRENT_CONTEXT.lock();
+    match cur.as_ref() {
+        Some(ctx) => Arc::as_ptr(ctx) as EGLContext,
+        None => EGL_NO_CONTEXT,
+    }
 }
 
 pub unsafe fn egl_get_current_surface(_readdraw: EGLint) -> EGLSurface {
-    CURRENT_SURFACE.with(|s| {
-        if let Some(surf) = s.borrow().as_ref() {
-            Arc::as_ptr(surf) as EGLSurface
-        } else {
-            EGL_NO_SURFACE
-        }
-    })
+    let cur = CURRENT_SURFACE.lock();
+    match cur.as_ref() {
+        Some(surf) => Arc::as_ptr(surf) as EGLSurface,
+        None => EGL_NO_SURFACE,
+    }
 }
 
 pub unsafe fn egl_get_current_display() -> EGLDisplay {
@@ -641,7 +762,7 @@ pub unsafe fn egl_query_surface(
             _ => *value = 0,
         }
     }
-    std::mem::forget(surf_arc);
+    core::mem::forget(surf_arc);
     EGL_TRUE
 }
 
@@ -652,12 +773,12 @@ pub unsafe fn egl_swap_buffers(_dpy: EGLDisplay, surface: EGLSurface) -> EGLBool
 
     let surf_arc = Arc::from_raw(surface as *const Mutex<EglSurfaceState>);
     let renderer = surf_arc.lock().renderer.clone();
-    std::mem::forget(surf_arc);
+    core::mem::forget(surf_arc);
 
     if let Some(r) = renderer {
         let mut rend = r.lock();
-        if let Err(e) = rend.swap_buffers() {
-            log::error!("eglSwapBuffers error: {e}");
+        if rend.swap_buffers().is_err() {
+            set_egl_error(EGL_BAD_ACCESS);
             return EGL_FALSE;
         }
     }
@@ -680,27 +801,38 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
         }
     }
 
-    let is_current = CURRENT_SURFACE.with(|cur| {
-        cur.borrow()
-            .as_ref()
-            .map(|s| Arc::ptr_eq(s, &surf_arc))
-            .unwrap_or(false)
-    });
+    let is_current = CURRENT_SURFACE
+        .lock()
+        .as_ref()
+        .map(|s| Arc::ptr_eq(s, &surf_arc))
+        .unwrap_or(false);
     if is_current {
-        CURRENT_CONTEXT.with(|c| {
-            if let Some(ctx) = c.borrow().as_ref() {
-                let mut gl = ctx.lock();
-                gl.viewport = (0, 0, w as i32, h as i32);
-                gl.scissor = (0, 0, w as i32, h as i32);
-            }
-        });
+        if let Some(ctx) = CURRENT_CONTEXT.lock().as_ref() {
+            let mut gl = ctx.lock();
+            gl.viewport = (0, 0, w as i32, h as i32);
+            gl.scissor = (0, 0, w as i32, h as i32);
+        }
     }
 
-    std::mem::forget(surf_arc);
+    core::mem::forget(surf_arc);
     EGL_TRUE
 }
 
-pub unsafe fn egl_swap_interval(_dpy: EGLDisplay, _interval: EGLint) -> EGLBoolean {
+pub unsafe fn egl_swap_interval(_dpy: EGLDisplay, interval: EGLint) -> EGLBoolean {
+    if interval != 0 && interval != 1 {
+        set_egl_error(EGL_BAD_PARAMETER);
+        return EGL_FALSE;
+    }
+
+    let Some(surface) = CURRENT_SURFACE.lock().clone() else {
+        set_egl_error(EGL_BAD_SURFACE);
+        return EGL_FALSE;
+    };
+    let Some(renderer) = surface.lock().renderer.clone() else {
+        set_egl_error(EGL_BAD_SURFACE);
+        return EGL_FALSE;
+    };
+    renderer.lock().set_swap_interval(interval);
     EGL_TRUE
 }
 
@@ -712,7 +844,7 @@ pub unsafe fn egl_get_error() -> EGLint {
 }
 
 pub unsafe fn egl_get_proc_address(
-    procname: *const std::ffi::c_char,
+    procname: *const core::ffi::c_char,
 ) -> __eglMustCastToProperFunctionPointerType {
     if procname.is_null() {
         return None;
