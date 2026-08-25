@@ -10,6 +10,7 @@
 //!
 use crate::egl;
 use crate::eglBindAPI;
+use crate::eglCreatePixmapSurface;
 use crate::types::*;
 use alloc::sync::Arc;
 use core::ffi::{c_char, c_void, CStr};
@@ -44,7 +45,7 @@ pub fn native_display_ptr() -> *mut c_void {
     NATIVE_DISPLAY.load(core::sync::atomic::Ordering::Relaxed)
 }
 
-fn set_platform(platform: EGLenum, native_display: *mut c_void) -> bool {
+pub(crate) fn set_platform(platform: EGLenum, native_display: *mut c_void) -> bool {
     let tag = match platform {
         // EGL_DEFAULT_DISPLAY / EGL_NONE: pick from the environment.
         0 | 0x3038 => match env_cstr(b"XDG_SESSION_TYPE") {
@@ -183,7 +184,7 @@ unsafe extern "C" fn vendor_get_proc_address(proc_name: *const c_char) -> *mut c
         "eglCopyBuffers" => egl_copy_buffers_stub as *mut c_void,
         "eglCreateContext" => egl::egl_create_context as *mut c_void,
         "eglCreatePbufferSurface" => egl::egl_create_pbuffer_surface as *mut c_void,
-        "eglCreatePixmapSurface" => egl_create_pixmap_surface_stub as *mut c_void,
+        "eglCreatePixmapSurface" => eglCreatePixmapSurface as *mut c_void,
         "eglCreateWindowSurface" => egl::egl_create_window_surface as *mut c_void,
         "eglDestroyContext" => egl::egl_destroy_context as *mut c_void,
         "eglDestroySurface" => egl::egl_destroy_surface as *mut c_void,

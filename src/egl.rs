@@ -3,7 +3,7 @@
 use crate::display_list::DisplayListRegistry;
 use crate::error::AngleWgpuError;
 use crate::gl_context::GlContext;
-use crate::glvnd::{current_native_platform, native_display_ptr, NativePlatform};
+use crate::glvnd::{current_native_platform, native_display_ptr, set_platform, NativePlatform};
 use crate::renderer::WgpuRenderer;
 use crate::sync::Mutex;
 use crate::texture::TextureManager;
@@ -199,7 +199,15 @@ pub fn get_or_create_display() -> Arc<Mutex<EglDisplayState>> {
 // EGL C API
 // ============================================================================
 
-pub unsafe fn egl_get_display(_display_id: NativeDisplayType) -> EGLDisplay {
+pub unsafe fn egl_get_display(display_id: NativeDisplayType) -> EGLDisplay {
+    // Direct-link clients (no glvnd) pass the native display handle here:
+    // an X11 `Display*`/Wayland `wl_display*`, or EGL_DEFAULT_DISPLAY (null).
+    // Record it so window-surface creation can build a real wgpu surface.
+    let native = display_id as *mut c_void;
+    if !native.is_null() || current_native_platform() == NativePlatform::None {
+        // Platform 0 lets set_platform pick from the environment.
+        set_platform(0, native);
+    }
     let dpy = get_or_create_display();
     Arc::into_raw(dpy) as EGLDisplay
 }
@@ -385,11 +393,52 @@ pub unsafe fn egl_get_config_attrib(
         EGL_STENCIL_SIZE => *value = 8,
         EGL_SURFACE_TYPE => *value = EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
         EGL_RENDERABLE_TYPE => *value = EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT,
+        EGL_NATIVE_VISUAL_ID => *value = x11_default_visual_id(),
         _ => *value = 0,
     }
     EGL_TRUE
 }
 
+/// Best-effort XVisualID of the default visual for the current native X11
+/// display, resolved through libX11 at runtime (no hard dependency).
+/// Returns 0 when unavailable or not running on X11.
+fn x11_default_visual_id() -> EGLint {
+    if current_native_platform() != NativePlatform::X11 {
+        return 0;
+    }
+    let dpy = native_display_ptr();
+    if dpy.is_null() {
+        return 0;
+    }
+
+    const RTLD_LAZY: i32 = 1;
+    let lib = unsafe { libloading::Library::new("libX11.so.6") };
+    let lib = match lib {
+        Ok(l) => l,
+        Err(_) => return 0,
+    };
+
+    type XDefaultScreenFn = unsafe extern "C" fn(*mut c_void) -> i32;
+    type XDefaultVisualFn = unsafe extern "C" fn(*mut c_void, i32) -> *mut c_void;
+
+    unsafe {
+        let screen: libloading::Symbol<XDefaultScreenFn> = match lib.get(b"XDefaultScreen\0") {
+            Ok(s) => s,
+            Err(_) => return 0,
+        };
+        let visual_fn: libloading::Symbol<XDefaultVisualFn> = match lib.get(b"XDefaultVisual\0") {
+            Ok(s) => s,
+            Err(_) => return 0,
+        };
+        let vis = visual_fn(dpy, screen(dpy));
+        if vis.is_null() {
+            return 0;
+        }
+        // struct Visual { XExtData *ext_data; VisualID visualid; ... }
+        // visualid is the member right after the ext_data pointer.
+        *(vis as *const usize).add(1) as EGLint
+    }
+}
 pub unsafe fn egl_create_window_surface(
     dpy: EGLDisplay,
     _config: EGLConfig,
@@ -429,7 +478,7 @@ pub unsafe fn egl_create_window_surface(
     // `getPlatformDisplay`, so build a wgpu surface that actually presents.
     // Without that context (e.g. the pbuffer path passes win == null), fall
     // back to a headless offscreen renderer.
-    let renderer = if !win.is_null() && native_display_ptr() != core::ptr::null_mut() {
+    let renderer = if (win as usize) != 0 && native_display_ptr() != core::ptr::null_mut() {
         let kind = match current_native_platform() {
             NativePlatform::X11 => ANGLE_WGPU_NATIVE_X11,
             NativePlatform::Wayland => ANGLE_WGPU_NATIVE_WAYLAND,
@@ -449,7 +498,6 @@ pub unsafe fn egl_create_window_surface(
             }
         }
     } else {
-        // Headless renderer creation failure fails the surface: without a
         // renderer nothing would ever present. The error is retrievable via
         // `eglGetError` (EGL_BAD_ALLOC).
         match block_on(WgpuRenderer::new_headless(width, height)) {
@@ -605,7 +653,7 @@ pub unsafe fn egl_create_pbuffer_surface(
     _config: EGLConfig,
     attrib_list: *const EGLint,
 ) -> EGLSurface {
-    egl_create_window_surface(dpy, _config, core::ptr::null_mut(), attrib_list)
+    egl_create_window_surface(dpy, _config, core::mem::zeroed(), attrib_list)
 }
 
 pub unsafe fn egl_destroy_surface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean {

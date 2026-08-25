@@ -1209,7 +1209,26 @@ pub unsafe extern "C" fn glLightModelfv(pname: GLenum, params: *const GLfloat) {
 pub unsafe extern "C" fn glMaterialf(_face: GLenum, _pname: GLenum, _param: GLfloat) {}
 
 #[no_mangle]
-pub unsafe extern "C" fn glMaterialfv(_face: GLenum, _pname: GLenum, _params: *const GLfloat) {}
+pub unsafe extern "C" fn glMaterialfv(_face: GLenum, pname: GLenum, params: *const GLfloat) {
+    if params.is_null() {
+        return;
+    }
+    with_context(|ctx| match pname {
+        GL_AMBIENT_AND_DIFFUSE | GL_DIFFUSE | GL_AMBIENT => {
+            ctx.material_ambient_diffuse = [
+                *params.add(0),
+                *params.add(1),
+                *params.add(2),
+                if pname == GL_AMBIENT {
+                    1.0
+                } else {
+                    *params.add(3)
+                },
+            ];
+        }
+        _ => {}
+    });
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn glStencilFunc(func: GLenum, ref_val: GLint, mask: GLuint) {
@@ -1924,6 +1943,17 @@ pub unsafe extern "C" fn angle_wgpu_create_native_window_surface(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn eglCreatePixmapSurface(
+    _dpy: EGLDisplay,
+    _config: EGLConfig,
+    _pixmap: NativePixmapType,
+    _attrib_list: *const EGLint,
+) -> EGLSurface {
+    egl::set_egl_error(EGL_BAD_PARAMETER);
+    EGL_NO_SURFACE
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn eglBindAPI(_api: EGLenum) -> EGLBoolean {
     EGL_TRUE
 }
@@ -2142,6 +2172,7 @@ pub fn get_gl_proc_address(name: &str) -> __eglMustCastToProperFunctionPointerTy
         "eglTerminate" => eglTerminate as *const (),
         "eglChooseConfig" => eglChooseConfig as *const (),
         "eglCreateWindowSurface" => eglCreateWindowSurface as *const (),
+        "eglCreatePixmapSurface" => eglCreatePixmapSurface as *const (),
         "eglCreateContext" => eglCreateContext as *const (),
         "eglMakeCurrent" => eglMakeCurrent as *const (),
         "eglSwapInterval" => eglSwapInterval as *const (),

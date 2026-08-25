@@ -33,8 +33,18 @@ pub type EGLint = i32;
 pub type EGLBoolean = u32;
 pub type EGLenum = u32;
 pub type NativeDisplayType = *mut c_void;
+#[cfg(windows)]
 pub type NativeWindowType = *mut c_void;
+// Non-Windows (X11: Window/XID; Wayland callers cast wl_surface* through
+// uintptr_t, mirroring Khronos headers where the window system is chosen by
+// the consumer).
+#[cfg(not(windows))]
+pub type NativeWindowType = usize;
 pub type NativePixmapType = *mut c_void;
+// Standard Khronos platform aliases used by EGL clients (see eglplatform.h).
+pub type EGLNativeDisplayType = NativeDisplayType;
+pub type EGLNativeWindowType = NativeWindowType;
+pub type EGLNativePixmapType = NativePixmapType;
 pub type __eglMustCastToProperFunctionPointerType = Option<unsafe extern "C" fn()>;
 
 /// Host window description for `angle_wgpu_create_native_window_surface`.

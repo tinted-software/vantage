@@ -59,6 +59,7 @@ pub struct GlContext {
 
     // Current vertex attributes
     pub current_color: [f32; 4],
+    pub material_ambient_diffuse: [f32; 4],
     pub current_normal: [f32; 3],
     pub current_texcoord: [f32; 2],
 
@@ -197,6 +198,7 @@ impl GlContext {
             projection_stack: MatrixStack::new(32),
             texture_stack: MatrixStack::new(32),
             current_color: [1.0, 1.0, 1.0, 1.0],
+            material_ambient_diffuse: [1.0, 1.0, 1.0, 1.0],
             current_normal: [0.0, 0.0, 1.0],
             current_texcoord: [0.0, 0.0],
             vertex_array_enabled: false,
@@ -491,7 +493,11 @@ impl GlContext {
             projection: proj.to_array(),
             texture_matrix: tex_m.to_array(),
             normal_matrix: normal_mat4,
-            color: self.current_color,
+            color: if self.lighting_enabled && !self.color_material_enabled {
+                self.material_ambient_diffuse
+            } else {
+                self.current_color
+            },
             fog_color: self.fog_color,
             fog_params: [
                 self.fog_start,
