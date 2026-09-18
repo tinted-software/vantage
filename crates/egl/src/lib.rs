@@ -8,15 +8,15 @@
 extern crate alloc;
 
 pub mod egl;
+pub mod gl_reexports;
 pub mod glvnd;
 pub mod platform;
-pub mod gl_reexports;
 
 pub use crate::egl::*;
 pub use vantage_gles::types::*;
 
-pub use vantage_gles::*;
 use core::ffi::{c_char, c_void};
+pub use vantage_gles::*;
 
 /// Freestanding support (no `std`): the cdylib still needs a panic handler
 /// and a global allocator to link. A fixed-heap bump allocator is provided
@@ -390,6 +390,5 @@ pub fn get_gl_proc_address(name: &str) -> __eglMustCastToProperFunctionPointerTy
 }
 
 #[used]
-static GLES_EXPORT_KEEP: [unsafe extern "C" fn(); 1] = [
-    unsafe { core::mem::transmute(vantage_gles::glMatrixMode as *const ()) },
-];
+static GLES_EXPORT_KEEP: [unsafe extern "C" fn(); 1] =
+    [unsafe { core::mem::transmute(vantage_gles::glMatrixMode as *const ()) }];

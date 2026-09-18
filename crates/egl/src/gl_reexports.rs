@@ -1,6 +1,6 @@
 // Generated GLES C ABI re-exports
-use vantage_gles::*;
 use core::ffi::*;
+use vantage_gles::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn glMatrixMode(mode: GLenum) {
@@ -48,22 +48,50 @@ pub unsafe extern "C" fn glScaled(x: GLdouble, y: GLdouble, z: GLdouble) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glOrtho(left: GLdouble, right: GLdouble, bottom: GLdouble, top: GLdouble, near_val: GLdouble, far_val: GLdouble) {
+pub unsafe extern "C" fn glOrtho(
+    left: GLdouble,
+    right: GLdouble,
+    bottom: GLdouble,
+    top: GLdouble,
+    near_val: GLdouble,
+    far_val: GLdouble,
+) {
     vantage_gles::glOrtho(left, right, bottom, top, near_val, far_val)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glOrthof(left: GLfloat, right: GLfloat, bottom: GLfloat, top: GLfloat, near_val: GLfloat, far_val: GLfloat) {
+pub unsafe extern "C" fn glOrthof(
+    left: GLfloat,
+    right: GLfloat,
+    bottom: GLfloat,
+    top: GLfloat,
+    near_val: GLfloat,
+    far_val: GLfloat,
+) {
     vantage_gles::glOrthof(left, right, bottom, top, near_val, far_val)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glFrustum(left: GLdouble, right: GLdouble, bottom: GLdouble, top: GLdouble, near_val: GLdouble, far_val: GLdouble) {
+pub unsafe extern "C" fn glFrustum(
+    left: GLdouble,
+    right: GLdouble,
+    bottom: GLdouble,
+    top: GLdouble,
+    near_val: GLdouble,
+    far_val: GLdouble,
+) {
     vantage_gles::glFrustum(left, right, bottom, top, near_val, far_val)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glFrustumf(left: GLfloat, right: GLfloat, bottom: GLfloat, top: GLfloat, near_val: GLfloat, far_val: GLfloat) {
+pub unsafe extern "C" fn glFrustumf(
+    left: GLfloat,
+    right: GLfloat,
+    bottom: GLfloat,
+    top: GLfloat,
+    near_val: GLfloat,
+    far_val: GLfloat,
+) {
     vantage_gles::glFrustumf(left, right, bottom, top, near_val, far_val)
 }
 
@@ -88,17 +116,32 @@ pub unsafe extern "C" fn glDisableClientState(array: GLenum) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glVertexPointer(size: GLint, type_: GLenum, stride: GLsizei, pointer: *const c_void) {
+pub unsafe extern "C" fn glVertexPointer(
+    size: GLint,
+    type_: GLenum,
+    stride: GLsizei,
+    pointer: *const c_void,
+) {
     vantage_gles::glVertexPointer(size, type_, stride, pointer)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glTexCoordPointer(size: GLint, type_: GLenum, stride: GLsizei, pointer: *const c_void) {
+pub unsafe extern "C" fn glTexCoordPointer(
+    size: GLint,
+    type_: GLenum,
+    stride: GLsizei,
+    pointer: *const c_void,
+) {
     vantage_gles::glTexCoordPointer(size, type_, stride, pointer)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glColorPointer(size: GLint, type_: GLenum, stride: GLsizei, pointer: *const c_void) {
+pub unsafe extern "C" fn glColorPointer(
+    size: GLint,
+    type_: GLenum,
+    stride: GLsizei,
+    pointer: *const c_void,
+) {
     vantage_gles::glColorPointer(size, type_, stride, pointer)
 }
 
@@ -118,7 +161,12 @@ pub unsafe extern "C" fn glDrawArrays(mode: GLenum, first: GLint, count: GLsizei
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glDrawElements(mode: GLenum, count: GLsizei, type_: GLenum, indices: *const c_void) {
+pub unsafe extern "C" fn glDrawElements(
+    mode: GLenum,
+    count: GLsizei,
+    type_: GLenum,
+    indices: *const c_void,
+) {
     vantage_gles::glDrawElements(mode, count, type_, indices)
 }
 
@@ -153,7 +201,13 @@ pub unsafe extern "C" fn glMultiTexCoord2f(target: GLenum, s: GLfloat, t: GLfloa
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glMultiTexCoord4f(target: GLenum, s: GLfloat, t: GLfloat, r: GLfloat, q: GLfloat) {
+pub unsafe extern "C" fn glMultiTexCoord4f(
+    target: GLenum,
+    s: GLfloat,
+    t: GLfloat,
+    r: GLfloat,
+    q: GLfloat,
+) {
     vantage_gles::glMultiTexCoord4f(target, s, t, r, q)
 }
 
@@ -238,13 +292,45 @@ pub unsafe extern "C" fn glBindTexture(target: GLenum, texture: GLuint) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glTexImage2D(target: GLenum, level: GLint, internalformat: GLint, width: GLsizei, height: GLsizei, border: GLint, format: GLenum, type_: GLenum, pixels: *const c_void) {
-    vantage_gles::glTexImage2D(target, level, internalformat, width, height, border, format, type_, pixels)
+pub unsafe extern "C" fn glTexImage2D(
+    target: GLenum,
+    level: GLint,
+    internalformat: GLint,
+    width: GLsizei,
+    height: GLsizei,
+    border: GLint,
+    format: GLenum,
+    type_: GLenum,
+    pixels: *const c_void,
+) {
+    vantage_gles::glTexImage2D(
+        target,
+        level,
+        internalformat,
+        width,
+        height,
+        border,
+        format,
+        type_,
+        pixels,
+    )
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glTexSubImage2D(target: GLenum, level: GLint, xoffset: GLint, yoffset: GLint, width: GLsizei, height: GLsizei, format: GLenum, type_: GLenum, pixels: *const c_void) {
-    vantage_gles::glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type_, pixels)
+pub unsafe extern "C" fn glTexSubImage2D(
+    target: GLenum,
+    level: GLint,
+    xoffset: GLint,
+    yoffset: GLint,
+    width: GLsizei,
+    height: GLsizei,
+    format: GLenum,
+    type_: GLenum,
+    pixels: *const c_void,
+) {
+    vantage_gles::glTexSubImage2D(
+        target, level, xoffset, yoffset, width, height, format, type_, pixels,
+    )
 }
 
 #[no_mangle]
@@ -273,17 +359,62 @@ pub unsafe extern "C" fn glActiveTexture(texture: GLenum) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glTexImage1D(target: GLenum, level: GLint, internalformat: GLint, width: GLsizei, border: GLint, format: GLenum, type_: GLenum, pixels: *const c_void) {
-    vantage_gles::glTexImage1D(target, level, internalformat, width, border, format, type_, pixels)
+pub unsafe extern "C" fn glTexImage1D(
+    target: GLenum,
+    level: GLint,
+    internalformat: GLint,
+    width: GLsizei,
+    border: GLint,
+    format: GLenum,
+    type_: GLenum,
+    pixels: *const c_void,
+) {
+    vantage_gles::glTexImage1D(
+        target,
+        level,
+        internalformat,
+        width,
+        border,
+        format,
+        type_,
+        pixels,
+    )
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glTexImage3D(target: GLenum, level: GLint, internalformat: GLint, width: GLsizei, height: GLsizei, depth: GLsizei, border: GLint, format: GLenum, type_: GLenum, pixels: *const c_void) {
-    vantage_gles::glTexImage3D(target, level, internalformat, width, height, depth, border, format, type_, pixels)
+pub unsafe extern "C" fn glTexImage3D(
+    target: GLenum,
+    level: GLint,
+    internalformat: GLint,
+    width: GLsizei,
+    height: GLsizei,
+    depth: GLsizei,
+    border: GLint,
+    format: GLenum,
+    type_: GLenum,
+    pixels: *const c_void,
+) {
+    vantage_gles::glTexImage3D(
+        target,
+        level,
+        internalformat,
+        width,
+        height,
+        depth,
+        border,
+        format,
+        type_,
+        pixels,
+    )
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glGetTexLevelParameteri(target: GLenum, level: GLint, pname: GLenum, params: *mut GLint) {
+pub unsafe extern "C" fn glGetTexLevelParameteri(
+    target: GLenum,
+    level: GLint,
+    pname: GLenum,
+    params: *mut GLint,
+) {
     vantage_gles::glGetTexLevelParameteri(target, level, pname, params)
 }
 
@@ -338,12 +469,22 @@ pub unsafe extern "C" fn glBlendFunc(sfactor: GLenum, dfactor: GLenum) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glBlendColor(red: GLclampf, green: GLclampf, blue: GLclampf, alpha: GLclampf) {
+pub unsafe extern "C" fn glBlendColor(
+    red: GLclampf,
+    green: GLclampf,
+    blue: GLclampf,
+    alpha: GLclampf,
+) {
     vantage_gles::glBlendColor(red, green, blue, alpha)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glBlendFuncSeparate(srcRGB: GLenum, dstRGB: GLenum, srcAlpha: GLenum, dstAlpha: GLenum) {
+pub unsafe extern "C" fn glBlendFuncSeparate(
+    srcRGB: GLenum,
+    dstRGB: GLenum,
+    srcAlpha: GLenum,
+    dstAlpha: GLenum,
+) {
     vantage_gles::glBlendFuncSeparate(srcRGB, dstRGB, srcAlpha, dstAlpha)
 }
 
@@ -358,7 +499,12 @@ pub unsafe extern "C" fn glDepthMask(flag: GLboolean) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glColorMask(red: GLboolean, green: GLboolean, blue: GLboolean, alpha: GLboolean) {
+pub unsafe extern "C" fn glColorMask(
+    red: GLboolean,
+    green: GLboolean,
+    blue: GLboolean,
+    alpha: GLboolean,
+) {
     vantage_gles::glColorMask(red, green, blue, alpha)
 }
 
@@ -498,7 +644,12 @@ pub unsafe extern "C" fn glScissor(x: GLint, y: GLint, width: GLsizei, height: G
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glClearColor(red: GLclampf, green: GLclampf, blue: GLclampf, alpha: GLclampf) {
+pub unsafe extern "C" fn glClearColor(
+    red: GLclampf,
+    green: GLclampf,
+    blue: GLclampf,
+    alpha: GLclampf,
+) {
     vantage_gles::glClearColor(red, green, blue, alpha)
 }
 
@@ -528,7 +679,15 @@ pub unsafe extern "C" fn glPixelStorei(pname: GLenum, param: GLint) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glReadPixels(x: GLint, y: GLint, width: GLsizei, height: GLsizei, format: GLenum, type_: GLenum, pixels: *mut c_void) {
+pub unsafe extern "C" fn glReadPixels(
+    x: GLint,
+    y: GLint,
+    width: GLsizei,
+    height: GLsizei,
+    format: GLenum,
+    type_: GLenum,
+    pixels: *mut c_void,
+) {
     vantage_gles::glReadPixels(x, y, width, height, format, type_, pixels)
 }
 
@@ -593,7 +752,12 @@ pub unsafe extern "C" fn glCreateShader(shader_type: GLenum) -> GLuint {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glShaderSource(shader: GLuint, count: GLsizei, string: *const *const GLchar, length: *const GLint) {
+pub unsafe extern "C" fn glShaderSource(
+    shader: GLuint,
+    count: GLsizei,
+    string: *const *const GLchar,
+    length: *const GLint,
+) {
     vantage_gles::glShaderSource(shader, count, string, length)
 }
 
@@ -608,7 +772,12 @@ pub unsafe extern "C" fn glGetShaderiv(shader: GLuint, pname: GLenum, params: *m
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glGetShaderInfoLog(shader: GLuint, buf_size: GLsizei, length: *mut GLsizei, info_log: *mut GLchar) {
+pub unsafe extern "C" fn glGetShaderInfoLog(
+    shader: GLuint,
+    buf_size: GLsizei,
+    length: *mut GLsizei,
+    info_log: *mut GLchar,
+) {
     vantage_gles::glGetShaderInfoLog(shader, buf_size, length, info_log)
 }
 
@@ -643,7 +812,12 @@ pub unsafe extern "C" fn glGetProgramiv(program: GLuint, pname: GLenum, params: 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glGetProgramInfoLog(program: GLuint, buf_size: GLsizei, length: *mut GLsizei, info_log: *mut GLchar) {
+pub unsafe extern "C" fn glGetProgramInfoLog(
+    program: GLuint,
+    buf_size: GLsizei,
+    length: *mut GLsizei,
+    info_log: *mut GLchar,
+) {
     vantage_gles::glGetProgramInfoLog(program, buf_size, length, info_log)
 }
 
@@ -683,7 +857,13 @@ pub unsafe extern "C" fn glUniform3f(location: GLint, v0: GLfloat, v1: GLfloat, 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glUniform4f(location: GLint, v0: GLfloat, v1: GLfloat, v2: GLfloat, v3: GLfloat) {
+pub unsafe extern "C" fn glUniform4f(
+    location: GLint,
+    v0: GLfloat,
+    v1: GLfloat,
+    v2: GLfloat,
+    v3: GLfloat,
+) {
     vantage_gles::glUniform4f(location, v0, v1, v2, v3)
 }
 
@@ -708,7 +888,12 @@ pub unsafe extern "C" fn glUniform4i(location: GLint, v0: GLint, v1: GLint, v2: 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glUniformMatrix4fv(location: GLint, count: GLsizei, transpose: GLboolean, value: *const GLfloat) {
+pub unsafe extern "C" fn glUniformMatrix4fv(
+    location: GLint,
+    count: GLsizei,
+    transpose: GLboolean,
+    value: *const GLfloat,
+) {
     vantage_gles::glUniformMatrix4fv(location, count, transpose, value)
 }
 
@@ -733,17 +918,32 @@ pub unsafe extern "C" fn glBindBufferARB(target: GLenum, buffer: GLuint) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glBufferData(target: GLenum, size: GLsizeiptr, data: *const c_void, usage: GLenum) {
+pub unsafe extern "C" fn glBufferData(
+    target: GLenum,
+    size: GLsizeiptr,
+    data: *const c_void,
+    usage: GLenum,
+) {
     vantage_gles::glBufferData(target, size, data, usage)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glBufferDataARB(target: GLenum, size: GLsizeiptr, data: *const c_void, usage: GLenum) {
+pub unsafe extern "C" fn glBufferDataARB(
+    target: GLenum,
+    size: GLsizeiptr,
+    data: *const c_void,
+    usage: GLenum,
+) {
     vantage_gles::glBufferDataARB(target, size, data, usage)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glBufferSubData(target: GLenum, offset: GLintptr, size: GLsizeiptr, data: *const c_void) {
+pub unsafe extern "C" fn glBufferSubData(
+    target: GLenum,
+    offset: GLintptr,
+    size: GLsizeiptr,
+    data: *const c_void,
+) {
     vantage_gles::glBufferSubData(target, offset, size, data)
 }
 
@@ -758,7 +958,14 @@ pub unsafe extern "C" fn glDeleteBuffersARB(n: GLsizei, buffers: *const GLuint) 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glVertexAttribPointer(index: GLuint, size: GLint, type_: GLenum, normalized: GLboolean, stride: GLsizei, pointer: *const c_void) {
+pub unsafe extern "C" fn glVertexAttribPointer(
+    index: GLuint,
+    size: GLint,
+    type_: GLenum,
+    normalized: GLboolean,
+    stride: GLsizei,
+    pointer: *const c_void,
+) {
     vantage_gles::glVertexAttribPointer(index, size, type_, normalized, stride, pointer)
 }
 
@@ -783,7 +990,13 @@ pub unsafe extern "C" fn glBindFramebuffer(target: GLenum, framebuffer: GLuint) 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glFramebufferTexture2D(target: GLenum, attachment: GLenum, textarget: GLenum, texture: GLuint, level: GLint) {
+pub unsafe extern "C" fn glFramebufferTexture2D(
+    target: GLenum,
+    attachment: GLenum,
+    textarget: GLenum,
+    texture: GLuint,
+    level: GLint,
+) {
     vantage_gles::glFramebufferTexture2D(target, attachment, textarget, texture, level)
 }
 
@@ -808,7 +1021,12 @@ pub unsafe extern "C" fn glBindRenderbuffer(target: GLenum, renderbuffer: GLuint
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn glRenderbufferStorage(target: GLenum, internalformat: GLenum, width: GLsizei, height: GLsizei) {
+pub unsafe extern "C" fn glRenderbufferStorage(
+    target: GLenum,
+    internalformat: GLenum,
+    width: GLsizei,
+    height: GLsizei,
+) {
     vantage_gles::glRenderbufferStorage(target, internalformat, width, height)
 }
 

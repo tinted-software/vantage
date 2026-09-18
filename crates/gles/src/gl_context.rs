@@ -672,12 +672,17 @@ impl GlContext {
                     self.light_model_ambient[2] * color[2],
                 ];
                 let norm = glam::Vec3::new(v.normal[0], v.normal[1], v.normal[2]);
-                let norm = if self.normalize_enabled { norm.normalize_or_zero() } else { norm };
+                let norm = if self.normalize_enabled {
+                    norm.normalize_or_zero()
+                } else {
+                    norm
+                };
 
                 for i in 0..8 {
                     if self.lights_enabled[i] {
                         let l = &self.lights[i];
-                        let ldir = glam::Vec3::new(l.position[0], l.position[1], l.position[2]).normalize_or_zero();
+                        let ldir = glam::Vec3::new(l.position[0], l.position[1], l.position[2])
+                            .normalize_or_zero();
                         let n_dot_l = norm.dot(ldir).max(0.0);
 
                         lit_rgb[0] += l.ambient[0] * color[0] + l.diffuse[0] * color[0] * n_dot_l;
@@ -685,7 +690,12 @@ impl GlContext {
                         lit_rgb[2] += l.ambient[2] * color[2] + l.diffuse[2] * color[2] * n_dot_l;
                     }
                 }
-                color = [lit_rgb[0].min(1.0), lit_rgb[1].min(1.0), lit_rgb[2].min(1.0), color[3]];
+                color = [
+                    lit_rgb[0].min(1.0),
+                    lit_rgb[1].min(1.0),
+                    lit_rgb[2].min(1.0),
+                    color[3],
+                ];
             }
 
             // Eye distance for fog
@@ -736,7 +746,8 @@ impl GlContext {
         });
 
         // Record draw commands
-        self.command_buffer.push(vantage_hal::Cmd::BindPipeline { pipeline: pipe });
+        self.command_buffer
+            .push(vantage_hal::Cmd::BindPipeline { pipeline: pipe });
         self.command_buffer.push(vantage_hal::Cmd::SetViewport {
             x: self.viewport.0,
             y: self.viewport.1,
@@ -754,10 +765,11 @@ impl GlContext {
 
         let mut v_buffers = smallvec::SmallVec::new();
         v_buffers.push((v_buf, 0));
-        self.command_buffer.push(vantage_hal::Cmd::BindVertexBuffers {
-            first: 0,
-            buffers: v_buffers,
-        });
+        self.command_buffer
+            .push(vantage_hal::Cmd::BindVertexBuffers {
+                first: 0,
+                buffers: v_buffers,
+            });
 
         if let Some(i_buf) = i_buf_opt {
             let num_inds = final_indices.as_ref().unwrap().len() as u32;

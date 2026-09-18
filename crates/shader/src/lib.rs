@@ -307,7 +307,9 @@ impl ShaderCache {
     }
 
     pub fn get_or_compile(&mut self, key: &FragmentKey) -> &FragmentProgram {
-        self.programs.entry(*key).or_insert_with(|| FragmentProgram::compile(key))
+        self.programs
+            .entry(*key)
+            .or_insert_with(|| FragmentProgram::compile(key))
     }
 }
 
@@ -370,9 +372,13 @@ mod tests {
         let pass_prog = prog.evaluate(&state, &varyings, out_prog.as_mut_ptr() as *mut [u8; 4]);
 
         let mut out_ref = [0u8; 4];
-        let pass_ref = vantage_raster::reference_frag(&state, &varyings, out_ref.as_mut_ptr() as *mut [u8; 4]);
+        let pass_ref =
+            vantage_raster::reference_frag(&state, &varyings, out_ref.as_mut_ptr() as *mut [u8; 4]);
 
         assert_eq!(pass_prog, pass_ref, "Alpha pass must match");
-        assert_eq!(out_prog, out_ref, "Color output must match reference_frag exactly");
+        assert_eq!(
+            out_prog, out_ref,
+            "Color output must match reference_frag exactly"
+        );
     }
 }

@@ -25,7 +25,6 @@ pub struct TextureObject {
     pub max_level: u32,
     pub level_data: HashMap<u32, Vec<u8>>,
     pub dirty: bool,
-
 }
 
 impl TextureObject {

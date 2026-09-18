@@ -1,19 +1,17 @@
 //! EGL 1.4 API implementation and context/surface management.
 #![allow(unused_imports, dead_code)]
+use crate::glvnd::{current_native_platform, native_display_ptr, set_platform, NativePlatform};
 #[cfg(all(feature = "std", target_os = "linux"))]
 use crate::platform::x11::x11_shm::X11ShmSurface;
-use vantage_gles::display_list::DisplayListRegistry;
-use vantage_gles::gl_context::{
-    set_current_gl_context, GlContext, CURRENT_CONTEXT,
-};
-use crate::glvnd::{current_native_platform, native_display_ptr, set_platform, NativePlatform};
-use vantage_gles::sync::Mutex;
-use vantage_gles::texture::TextureManager;
-use vantage_gles::types::*;
 use alloc::collections::BTreeMap as HashMap;
 use alloc::sync::Arc;
 use core::ffi::{c_void, CStr};
 use core::sync::atomic::{AtomicU32, Ordering};
+use vantage_gles::display_list::DisplayListRegistry;
+use vantage_gles::gl_context::{set_current_gl_context, GlContext, CURRENT_CONTEXT};
+use vantage_gles::sync::Mutex;
+use vantage_gles::texture::TextureManager;
+use vantage_gles::types::*;
 // every surface-creation path returns EGL_BAD_ALLOC.
 
 pub struct EglSurfaceState {
@@ -599,8 +597,12 @@ pub unsafe fn egl_make_current(
 
             let mut surf = surf_arc.lock();
             if surf.hal_color_image.is_none() {
-                let c_img = gl.hal_device.create_image(vantage_hal::Format::R8G8B8A8Unorm, w, h);
-                let d_img = gl.hal_device.create_image(vantage_hal::Format::D32Sfloat, w, h);
+                let c_img = gl
+                    .hal_device
+                    .create_image(vantage_hal::Format::R8G8B8A8Unorm, w, h);
+                let d_img = gl
+                    .hal_device
+                    .create_image(vantage_hal::Format::D32Sfloat, w, h);
                 surf.hal_color_image = Some(c_img);
                 surf.hal_depth_image = Some(d_img);
             }

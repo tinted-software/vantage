@@ -13,7 +13,9 @@
 #![no_std]
 extern crate alloc;
 
-pub use vantage_raster::{FragFn, FragState, RasterState, SampledTexture, Targets, Varyings, Vertex};
+pub use vantage_raster::{
+    FragFn, FragState, RasterState, SampledTexture, Targets, Varyings, Vertex,
+};
 
 use alloc::vec::Vec;
 use hashbrown::HashMap;
@@ -30,14 +32,22 @@ macro_rules! define_id {
     };
 }
 
-define_id!(/// Handle to a linear CPU buffer.
-BufferId);
-define_id!(/// Handle to a 2D image (color, depth, or stencil).
-ImageId);
-define_id!(/// Handle to a fixed-function pipeline state object.
-PipelineId);
-define_id!(/// Handle to a descriptor set (texture bindings for now).
-DescriptorSetId);
+define_id!(
+    /// Handle to a linear CPU buffer.
+    BufferId
+);
+define_id!(
+    /// Handle to a 2D image (color, depth, or stencil).
+    ImageId
+);
+define_id!(
+    /// Handle to a fixed-function pipeline state object.
+    PipelineId
+);
+define_id!(
+    /// Handle to a descriptor set (texture bindings for now).
+    DescriptorSetId
+);
 
 // ============================================================================
 // Formats and limits
@@ -285,10 +295,12 @@ impl Device {
 
     pub fn create_buffer(&mut self, size: u64) -> BufferId {
         let id = BufferId(self.alloc_id());
-        self.buffers
-            .insert(id, Buffer {
+        self.buffers.insert(
+            id,
+            Buffer {
                 data: alloc::vec![0u8; size as usize],
-            });
+            },
+        );
         id
     }
 
@@ -364,7 +376,12 @@ impl Queue {
 
         for op in &cmd.ops {
             match op {
-                FillBuffer { dst, offset, size, value } => {
+                FillBuffer {
+                    dst,
+                    offset,
+                    size,
+                    value,
+                } => {
                     if let Some(b) = dev.buffer_mut(*dst) {
                         let start = (*offset as usize).min(b.data.len());
                         let end = (start + *size as usize).min(b.data.len());
@@ -419,13 +436,21 @@ impl Queue {
                         }
                     }
                 }
-                BindIndexBuffer { buffer, offset, index_ty } => {
+                BindIndexBuffer {
+                    buffer,
+                    offset,
+                    index_ty,
+                } => {
                     index_buffer = Some((*buffer, *offset, *index_ty));
                 }
                 PushConstants { data } => push = *data,
                 SetViewport { x, y, w, h } => viewport = (*x, *y, *w, *h),
                 SetScissor { x, y, w, h } => scissor = Some((*x, *y, *w, *h)),
-                BindAttachments { color, depth, stencil } => {
+                BindAttachments {
+                    color,
+                    depth,
+                    stencil,
+                } => {
                     color_target = *color;
                     depth_target = *depth;
                     stencil_target = *stencil;
@@ -583,13 +608,28 @@ mod tests {
             mask: 1 | 2,
         });
         cmd.push(Cmd::BindPipeline { pipeline: pipe });
-        cmd.push(Cmd::SetViewport { x: 0, y: 0, w: 64, h: 64 });
+        cmd.push(Cmd::SetViewport {
+            x: 0,
+            y: 0,
+            w: 64,
+            h: 64,
+        });
         let mut v_vec = smallvec::SmallVec::new();
         v_vec.push((v_buf, 0));
-        cmd.push(Cmd::BindVertexBuffers { first: 0, buffers: v_vec });
-        cmd.push(Cmd::BindIndexBuffer { buffer: i_buf, offset: 0, index_ty: IndexType::U16 });
+        cmd.push(Cmd::BindVertexBuffers {
+            first: 0,
+            buffers: v_vec,
+        });
+        cmd.push(Cmd::BindIndexBuffer {
+            buffer: i_buf,
+            offset: 0,
+            index_ty: IndexType::U16,
+        });
         cmd.push(Cmd::DrawIndexed { count: 3, first: 0 });
-        cmd.push(Cmd::CopyImageToBuffer { src: color_img, dst: readback_buf });
+        cmd.push(Cmd::CopyImageToBuffer {
+            src: color_img,
+            dst: readback_buf,
+        });
 
         dev.submit(&cmd);
 
@@ -680,20 +720,29 @@ fn execute_draw(
     depth_id: Option<ImageId>,
     stencil_id: Option<ImageId>,
 ) {
-    let Some(pipe_id) = pipeline_id else { return; };
-    let Some(pipe) = dev.pipelines.get(&pipe_id).cloned() else { return; };
-    let Some(c_id) = color_id else { return; };
+    let Some(pipe_id) = pipeline_id else {
+        return;
+    };
+    let Some(pipe) = dev.pipelines.get(&pipe_id).cloned() else {
+        return;
+    };
+    let Some(c_id) = color_id else {
+        return;
+    };
 
     // Get vertex buffer data
-    let Some((v_buf_id, v_offset)) = vertex_buffers.get(0).cloned() else { return; };
-    let Some(v_buf) = dev.buffer(v_buf_id) else { return; };
+    let Some((v_buf_id, v_offset)) = vertex_buffers.get(0).cloned() else {
+        return;
+    };
+    let Some(v_buf) = dev.buffer(v_buf_id) else {
+        return;
+    };
 
     let v_slice = &v_buf.data[(v_offset as usize)..];
     let v_size = core::mem::size_of::<Vertex>();
     let num_verts = v_slice.len() / v_size;
-    let vertices: &[Vertex] = unsafe {
-        core::slice::from_raw_parts(v_slice.as_ptr() as *const Vertex, num_verts)
-    };
+    let vertices: &[Vertex] =
+        unsafe { core::slice::from_raw_parts(v_slice.as_ptr() as *const Vertex, num_verts) };
 
     // Construct raster state
     let raster_state = RasterState {
@@ -778,12 +827,16 @@ fn execute_draw(
                 let indices: alloc::vec::Vec<u32> = match i_type {
                     IndexType::U16 => {
                         let num = i_slice.len() / 2;
-                        let s: &[u16] = unsafe { core::slice::from_raw_parts(i_slice.as_ptr() as *const u16, num) };
+                        let s: &[u16] = unsafe {
+                            core::slice::from_raw_parts(i_slice.as_ptr() as *const u16, num)
+                        };
                         s.iter().map(|&idx| idx as u32).collect()
                     }
                     IndexType::U32 => {
                         let num = i_slice.len() / 4;
-                        let s: &[u32] = unsafe { core::slice::from_raw_parts(i_slice.as_ptr() as *const u32, num) };
+                        let s: &[u32] = unsafe {
+                            core::slice::from_raw_parts(i_slice.as_ptr() as *const u32, num)
+                        };
                         s.to_vec()
                     }
                 };

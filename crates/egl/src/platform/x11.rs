@@ -53,7 +53,12 @@ pub mod x11_shm {
         pub fn XDefaultScreen(dpy: *mut Display) -> c_int;
         pub fn XDefaultVisual(dpy: *mut Display, screen: c_int) -> *mut c_void;
         pub fn XDefaultDepth(dpy: *mut Display, screen: c_int) -> c_int;
-        pub fn XCreateGC(dpy: *mut Display, d: Window, valuemask: c_ulong, values: *mut c_void) -> GC;
+        pub fn XCreateGC(
+            dpy: *mut Display,
+            d: Window,
+            valuemask: c_ulong,
+            values: *mut c_void,
+        ) -> GC;
         pub fn XFreeGC(dpy: *mut Display, gc: GC) -> c_int;
         pub fn XFlush(dpy: *mut Display) -> c_int;
         pub fn XSync(dpy: *mut Display, discard: Bool) -> c_int;
@@ -105,7 +110,12 @@ pub mod x11_shm {
     unsafe impl Sync for X11ShmSurface {}
 
     impl X11ShmSurface {
-        pub unsafe fn new(mut dpy: *mut Display, win: Window, width: u32, height: u32) -> Result<Self, &'static str> {
+        pub unsafe fn new(
+            mut dpy: *mut Display,
+            win: Window,
+            width: u32,
+            height: u32,
+        ) -> Result<Self, &'static str> {
             let owns_display = if dpy.is_null() {
                 dpy = XOpenDisplay(core::ptr::null());
                 if dpy.is_null() {
@@ -219,9 +229,9 @@ pub mod x11_shm {
                 for x in 0..w {
                     let so = x * 4;
                     let do_off = x * 4;
-                    dst_row[do_off] = src_row[so + 2];     // B
+                    dst_row[do_off] = src_row[so + 2]; // B
                     dst_row[do_off + 1] = src_row[so + 1]; // G
-                    dst_row[do_off + 2] = src_row[so];     // R
+                    dst_row[do_off + 2] = src_row[so]; // R
                     dst_row[do_off + 3] = src_row[so + 3]; // A
                 }
             }

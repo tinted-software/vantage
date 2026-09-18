@@ -11,9 +11,9 @@
 use crate::egl;
 use crate::eglBindAPI;
 use crate::eglCreatePixmapSurface;
-use vantage_gles::types::*;
 use alloc::sync::Arc;
 use core::ffi::{c_char, c_void, CStr};
+use vantage_gles::types::*;
 
 /// Pointer-sized attribute type used by eglGetPlatformDisplay (EGLAttrib).
 type EGLAttrib = isize;

@@ -193,11 +193,8 @@ pub struct FragState {
 ///
 /// Invariant: this function ONLY computes color/alpha-test/fog per pixel.
 /// All blending, depth and stencil handling stays in the raster core.
-pub type FragFn = unsafe fn(
-    ctx: *const FragState,
-    varying: *const Varyings,
-    out: *mut [u8; 4],
-) -> bool;
+pub type FragFn =
+    unsafe fn(ctx: *const FragState, varying: *const Varyings, out: *mut [u8; 4]) -> bool;
 
 // ============================================================================
 // Raster pipeline state
@@ -367,7 +364,6 @@ fn sample_texel(tex: &SampledTexture, u: f32, v: f32, linear: bool) -> [f32; 4] 
     expand_to_rgba(tex.format, r, g, b, a)
 }
 
-
 fn fetch(tex: &SampledTexture, x: i64, y: i64) -> [f32; 4] {
     let (x, y) = texel_or_edge(tex, x, y);
     let o = ((y * tex.width as i64 + x) * 4) as usize;
@@ -494,11 +490,7 @@ fn apply_fog(state: &FragState, color: &mut [f32; 4], fog: f32) {
 
 /// Reference scalar fragment shader (also the test oracle): texenv chain over
 /// unit 0 then unit 1, fog, alpha test.
-pub fn reference_frag(
-    ctx: *const FragState,
-    varying: *const Varyings,
-    out: *mut [u8; 4],
-) -> bool {
+pub fn reference_frag(ctx: *const FragState, varying: *const Varyings, out: *mut [u8; 4]) -> bool {
     unsafe {
         let st = &*ctx;
         let v = &*varying;
@@ -611,7 +603,18 @@ impl<'a> PrimitiveRasterizer<'a> {
     }
 
     #[inline]
-    fn blend_channel(src: f32, dst: f32, sfactor: u32, dfactor: u32, src_c: f32, dst_c: f32, src_a: f32, dst_a: f32, cc: f32, ca: f32) -> f32 {
+    fn blend_channel(
+        src: f32,
+        dst: f32,
+        sfactor: u32,
+        dfactor: u32,
+        src_c: f32,
+        dst_c: f32,
+        src_a: f32,
+        dst_a: f32,
+        cc: f32,
+        ca: f32,
+    ) -> f32 {
         let s_weight = match sfactor {
             gl::ZERO => 0.0,
             gl::ONE => 1.0,
@@ -651,13 +654,7 @@ impl<'a> PrimitiveRasterizer<'a> {
     }
 
     #[inline]
-    pub fn shade_and_blend_pixel(
-        &mut self,
-        px: i32,
-        py: i32,
-        z: f32,
-        varying: &Varyings,
-    ) {
+    pub fn shade_and_blend_pixel(&mut self, px: i32, py: i32, z: f32, varying: &Varyings) {
         if px < 0 || py < 0 || px >= self.targets.width as i32 || py >= self.targets.height as i32 {
             return;
         }
@@ -672,7 +669,11 @@ impl<'a> PrimitiveRasterizer<'a> {
         // 1. Fragment Function (color, texenv, fog, alpha-test)
         let mut frag_color = [0u8; 4]; // BGRA8
         let alpha_pass = unsafe {
-            (self.frag_fn)(self.frag_ctx, varying as *const Varyings, frag_color.as_mut_ptr() as *mut [u8; 4])
+            (self.frag_fn)(
+                self.frag_ctx,
+                varying as *const Varyings,
+                frag_color.as_mut_ptr() as *mut [u8; 4],
+            )
         };
         if !alpha_pass {
             return;
@@ -689,7 +690,12 @@ impl<'a> PrimitiveRasterizer<'a> {
         let depth_pass = if self.state.depth_test {
             if let Some(ref depth) = self.targets.depth {
                 let off = pixel_idx * 4;
-                let fb_z = f32::from_ne_bytes([depth[off], depth[off + 1], depth[off + 2], depth[off + 3]]);
+                let fb_z = f32::from_ne_bytes([
+                    depth[off],
+                    depth[off + 1],
+                    depth[off + 2],
+                    depth[off + 3],
+                ]);
                 depth_pass(self.state.depth_func, z, fb_z)
             } else {
                 true
@@ -730,17 +736,71 @@ impl<'a> PrimitiveRasterizer<'a> {
         );
 
         let (dst_r, dst_g, dst_b, dst_a) = if self.targets.bgra_order {
-            (c_dst[2] as f32 / 255.0, c_dst[1] as f32 / 255.0, c_dst[0] as f32 / 255.0, c_dst[3] as f32 / 255.0)
+            (
+                c_dst[2] as f32 / 255.0,
+                c_dst[1] as f32 / 255.0,
+                c_dst[0] as f32 / 255.0,
+                c_dst[3] as f32 / 255.0,
+            )
         } else {
-            (c_dst[0] as f32 / 255.0, c_dst[1] as f32 / 255.0, c_dst[2] as f32 / 255.0, c_dst[3] as f32 / 255.0)
+            (
+                c_dst[0] as f32 / 255.0,
+                c_dst[1] as f32 / 255.0,
+                c_dst[2] as f32 / 255.0,
+                c_dst[3] as f32 / 255.0,
+            )
         };
 
         let (final_r, final_g, final_b, final_a) = if self.state.blend_enabled {
             let cc = self.state.blend_color;
-            let r = Self::blend_channel(src_r, dst_r, self.state.src_rgb, self.state.dst_rgb, src_r, dst_r, src_a, dst_a, cc[0], cc[3]);
-            let g = Self::blend_channel(src_g, dst_g, self.state.src_rgb, self.state.dst_rgb, src_g, dst_g, src_a, dst_a, cc[1], cc[3]);
-            let b = Self::blend_channel(src_b, dst_b, self.state.src_rgb, self.state.dst_rgb, src_b, dst_b, src_a, dst_a, cc[2], cc[3]);
-            let a = Self::blend_channel(src_a, dst_a, self.state.src_alpha, self.state.dst_alpha, src_a, dst_a, src_a, dst_a, cc[3], cc[3]);
+            let r = Self::blend_channel(
+                src_r,
+                dst_r,
+                self.state.src_rgb,
+                self.state.dst_rgb,
+                src_r,
+                dst_r,
+                src_a,
+                dst_a,
+                cc[0],
+                cc[3],
+            );
+            let g = Self::blend_channel(
+                src_g,
+                dst_g,
+                self.state.src_rgb,
+                self.state.dst_rgb,
+                src_g,
+                dst_g,
+                src_a,
+                dst_a,
+                cc[1],
+                cc[3],
+            );
+            let b = Self::blend_channel(
+                src_b,
+                dst_b,
+                self.state.src_rgb,
+                self.state.dst_rgb,
+                src_b,
+                dst_b,
+                src_a,
+                dst_a,
+                cc[2],
+                cc[3],
+            );
+            let a = Self::blend_channel(
+                src_a,
+                dst_a,
+                self.state.src_alpha,
+                self.state.dst_alpha,
+                src_a,
+                dst_a,
+                src_a,
+                dst_a,
+                cc[3],
+                cc[3],
+            );
             (r, g, b, a)
         } else {
             (src_r, src_g, src_b, src_a)
@@ -754,15 +814,31 @@ impl<'a> PrimitiveRasterizer<'a> {
         let mask = self.state.color_mask;
         let c_out = &mut self.targets.color[color_off..color_off + 4];
         if self.targets.bgra_order {
-            if mask & 1 != 0 { c_out[2] = out_r; }
-            if mask & 2 != 0 { c_out[1] = out_g; }
-            if mask & 4 != 0 { c_out[0] = out_b; }
-            if mask & 8 != 0 { c_out[3] = out_a; }
+            if mask & 1 != 0 {
+                c_out[2] = out_r;
+            }
+            if mask & 2 != 0 {
+                c_out[1] = out_g;
+            }
+            if mask & 4 != 0 {
+                c_out[0] = out_b;
+            }
+            if mask & 8 != 0 {
+                c_out[3] = out_a;
+            }
         } else {
-            if mask & 1 != 0 { c_out[0] = out_r; }
-            if mask & 2 != 0 { c_out[1] = out_g; }
-            if mask & 4 != 0 { c_out[2] = out_b; }
-            if mask & 8 != 0 { c_out[3] = out_a; }
+            if mask & 1 != 0 {
+                c_out[0] = out_r;
+            }
+            if mask & 2 != 0 {
+                c_out[1] = out_g;
+            }
+            if mask & 4 != 0 {
+                c_out[2] = out_b;
+            }
+            if mask & 8 != 0 {
+                c_out[3] = out_a;
+            }
         }
     }
 
@@ -827,7 +903,8 @@ impl<'a> PrimitiveRasterizer<'a> {
             let dz_dx = (p1[2] - p0[2]) / ((p1[0] - p0[0]).abs().max(1.0));
             let dz_dy = (p2[2] - p0[2]) / ((p2[1] - p0[1]).abs().max(1.0));
             let max_slope = dz_dx.abs().max(dz_dy.abs());
-            z_offset = max_slope * self.state.polygon_offset_factor + self.state.polygon_offset_units * 0.00001;
+            z_offset = max_slope * self.state.polygon_offset_factor
+                + self.state.polygon_offset_units * 0.00001;
         }
 
         // Bounding box
@@ -887,12 +964,16 @@ impl<'a> PrimitiveRasterizer<'a> {
                         ],
                         // Perspective-correct texture coordinates
                         tex0: [
-                            (l0 * v0.tex0[0] * w0 + l1 * v1.tex0[0] * w1 + l2 * v2.tex0[0] * w2) * r_w,
-                            (l0 * v0.tex0[1] * w0 + l1 * v1.tex0[1] * w1 + l2 * v2.tex0[1] * w2) * r_w,
+                            (l0 * v0.tex0[0] * w0 + l1 * v1.tex0[0] * w1 + l2 * v2.tex0[0] * w2)
+                                * r_w,
+                            (l0 * v0.tex0[1] * w0 + l1 * v1.tex0[1] * w1 + l2 * v2.tex0[1] * w2)
+                                * r_w,
                         ],
                         tex1: [
-                            (l0 * v0.tex1[0] * w0 + l1 * v1.tex1[0] * w1 + l2 * v2.tex1[0] * w2) * r_w,
-                            (l0 * v0.tex1[1] * w0 + l1 * v1.tex1[1] * w1 + l2 * v2.tex1[1] * w2) * r_w,
+                            (l0 * v0.tex1[0] * w0 + l1 * v1.tex1[0] * w1 + l2 * v2.tex1[0] * w2)
+                                * r_w,
+                            (l0 * v0.tex1[1] * w0 + l1 * v1.tex1[1] * w1 + l2 * v2.tex1[1] * w2)
+                                * r_w,
                         ],
                         fog: l0 * v0.fog + l1 * v1.fog + l2 * v2.fog,
                         view_z: interp_z,
@@ -936,7 +1017,8 @@ impl<'a> PrimitiveRasterizer<'a> {
     }
 
     pub fn draw_line(&mut self, v0: &Vertex, v1: &Vertex) {
-        let (Some((p0, _)), Some((p1, _))) = (self.project_vertex(v0), self.project_vertex(v1)) else {
+        let (Some((p0, _)), Some((p1, _))) = (self.project_vertex(v0), self.project_vertex(v1))
+        else {
             return;
         };
 
@@ -1105,12 +1187,23 @@ mod tests {
             let mut row = alloc::string::String::new();
             for x in 0..16 {
                 let idx = (y * 16 + x) * 4;
-                if color[idx] > 0 { row.push('R'); } else { row.push('.'); }
+                if color[idx] > 0 {
+                    row.push('R');
+                } else {
+                    row.push('.');
+                }
             }
             // print row
         }
         let center_idx = (8 * 16 + 8) * 4;
-        assert_eq!(color[center_idx], 255, "Center pixel should remain red after alpha discard");
-        assert_eq!(color[center_idx + 2], 0, "Blue component should not be written");
+        assert_eq!(
+            color[center_idx], 255,
+            "Center pixel should remain red after alpha discard"
+        );
+        assert_eq!(
+            color[center_idx + 2],
+            0,
+            "Blue component should not be written"
+        );
     }
 }

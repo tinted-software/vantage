@@ -1205,9 +1205,15 @@ pub unsafe extern "C" fn glClearStencil(s: GLint) {
 pub unsafe extern "C" fn glClear(mask: GLbitfield) {
     with_context(|ctx| {
         let mut hal_mask = 0u32;
-        if (mask & GL_COLOR_BUFFER_BIT) != 0 { hal_mask |= 1; }
-        if (mask & GL_DEPTH_BUFFER_BIT) != 0 { hal_mask |= 2; }
-        if (mask & GL_STENCIL_BUFFER_BIT) != 0 { hal_mask |= 4; }
+        if (mask & GL_COLOR_BUFFER_BIT) != 0 {
+            hal_mask |= 1;
+        }
+        if (mask & GL_DEPTH_BUFFER_BIT) != 0 {
+            hal_mask |= 2;
+        }
+        if (mask & GL_STENCIL_BUFFER_BIT) != 0 {
+            hal_mask |= 4;
+        }
 
         ctx.command_buffer.push(vantage_hal::Cmd::ClearAttachments {
             color: ctx.clear_color,
