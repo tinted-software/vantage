@@ -76,14 +76,12 @@ pub unsafe extern "C" fn glMatrixMode(mode: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glLoadIdentity() {
     with_context(|ctx| {
         ctx.current_matrix_stack().load_identity();
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glPushMatrix() {
     with_context(|ctx| {
         let mode = ctx.matrix_mode;
@@ -94,7 +92,6 @@ pub unsafe extern "C" fn glPushMatrix() {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glPopMatrix() {
     with_context(|ctx| {
         let mode = ctx.matrix_mode;
@@ -105,7 +102,6 @@ pub unsafe extern "C" fn glPopMatrix() {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTranslatef(x: GLfloat, y: GLfloat, z: GLfloat) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -115,12 +111,10 @@ pub unsafe extern "C" fn glTranslatef(x: GLfloat, y: GLfloat, z: GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTranslated(x: GLdouble, y: GLdouble, z: GLdouble) {
     glTranslatef(x as GLfloat, y as GLfloat, z as GLfloat);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glRotatef(angle: GLfloat, x: GLfloat, y: GLfloat, z: GLfloat) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -132,7 +126,6 @@ pub unsafe extern "C" fn glRotatef(angle: GLfloat, x: GLfloat, y: GLfloat, z: GL
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glScalef(x: GLfloat, y: GLfloat, z: GLfloat) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -142,12 +135,10 @@ pub unsafe extern "C" fn glScalef(x: GLfloat, y: GLfloat, z: GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glScaled(x: GLdouble, y: GLdouble, z: GLdouble) {
     glScalef(x as GLfloat, y as GLfloat, z as GLfloat);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glOrtho(
     left: GLdouble,
     right: GLdouble,
@@ -166,7 +157,6 @@ pub unsafe extern "C" fn glOrtho(
     );
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glOrthof(
     left: GLfloat,
     right: GLfloat,
@@ -181,7 +171,6 @@ pub unsafe extern "C" fn glOrthof(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFrustum(
     left: GLdouble,
     right: GLdouble,
@@ -200,7 +189,6 @@ pub unsafe extern "C" fn glFrustum(
     );
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFrustumf(
     left: GLfloat,
     right: GLfloat,
@@ -215,7 +203,6 @@ pub unsafe extern "C" fn glFrustumf(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glMultMatrixf(m: *const GLfloat) {
     if m.is_null() {
         return;
@@ -228,7 +215,6 @@ pub unsafe extern "C" fn glMultMatrixf(m: *const GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glLoadMatrixf(m: *const GLfloat) {
     if m.is_null() {
         return;
@@ -255,7 +241,6 @@ fn set_gl_error(err: GLenum) {
 // Client State and Vertex Arrays
 // ============================================================================
 
-#[no_mangle]
 pub unsafe extern "C" fn glEnableClientState(array: GLenum) {
     with_context(|ctx| match array {
         GL_VERTEX_ARRAY => ctx.vertex_array_enabled = true,
@@ -266,7 +251,6 @@ pub unsafe extern "C" fn glEnableClientState(array: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDisableClientState(array: GLenum) {
     with_context(|ctx| match array {
         GL_VERTEX_ARRAY => ctx.vertex_array_enabled = false,
@@ -277,7 +261,6 @@ pub unsafe extern "C" fn glDisableClientState(array: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glVertexPointer(
     size: GLint,
     type_: GLenum,
@@ -292,7 +275,6 @@ pub unsafe extern "C" fn glVertexPointer(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexCoordPointer(
     size: GLint,
     type_: GLenum,
@@ -307,7 +289,6 @@ pub unsafe extern "C" fn glTexCoordPointer(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glColorPointer(
     size: GLint,
     type_: GLenum,
@@ -322,7 +303,6 @@ pub unsafe extern "C" fn glColorPointer(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glNormalPointer(type_: GLenum, stride: GLsizei, pointer: *const c_void) {
     with_context(|ctx| {
         ctx.normal_pointer_type = type_;
@@ -331,7 +311,6 @@ pub unsafe extern "C" fn glNormalPointer(type_: GLenum, stride: GLsizei, pointer
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glClientActiveTexture(texture: GLenum) {
     with_context(|ctx| {
         let idx = (texture.saturating_sub(GL_TEXTURE0)) as usize;
@@ -345,7 +324,6 @@ pub unsafe extern "C" fn glClientActiveTexture(texture: GLenum) {
 // Draw Calls
 // ============================================================================
 
-#[no_mangle]
 pub unsafe extern "C" fn glDrawArrays(mode: GLenum, first: GLint, count: GLsizei) {
     if count <= 0 {
         return;
@@ -365,7 +343,6 @@ pub unsafe extern "C" fn glDrawArrays(mode: GLenum, first: GLint, count: GLsizei
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDrawElements(
     mode: GLenum,
     count: GLsizei,
@@ -413,7 +390,6 @@ pub unsafe extern "C" fn glDrawElements(
 // Immediate Mode (glBegin/glEnd)
 // ============================================================================
 
-#[no_mangle]
 pub unsafe extern "C" fn glBegin(mode: GLenum) {
     with_context(|ctx| {
         ctx.immediate_mode = Some(mode);
@@ -421,7 +397,6 @@ pub unsafe extern "C" fn glBegin(mode: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glEnd() {
     with_context(|ctx| {
         if let Some(mode) = ctx.immediate_mode.take() {
@@ -431,7 +406,6 @@ pub unsafe extern "C" fn glEnd() {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glVertex3f(x: GLfloat, y: GLfloat, z: GLfloat) {
     with_context(|ctx| {
         if ctx.immediate_mode.is_some() {
@@ -445,12 +419,10 @@ pub unsafe extern "C" fn glVertex3f(x: GLfloat, y: GLfloat, z: GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glVertex2f(x: GLfloat, y: GLfloat) {
     glVertex3f(x, y, 0.0);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexCoord2f(u: GLfloat, v: GLfloat) {
     with_context(|ctx| {
         ctx.current_texcoord = [u, v];
@@ -460,12 +432,10 @@ pub unsafe extern "C" fn glTexCoord2f(u: GLfloat, v: GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glMultiTexCoord2f(_target: GLenum, s: GLfloat, t: GLfloat) {
     glTexCoord2f(s, t);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glMultiTexCoord4f(
     _target: GLenum,
     s: GLfloat,
@@ -476,7 +446,6 @@ pub unsafe extern "C" fn glMultiTexCoord4f(
     glTexCoord2f(s, t);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glColor4f(r: GLfloat, g: GLfloat, b: GLfloat, a: GLfloat) {
     with_context(|ctx| {
         ctx.current_color = [r, g, b, a];
@@ -486,12 +455,10 @@ pub unsafe extern "C" fn glColor4f(r: GLfloat, g: GLfloat, b: GLfloat, a: GLfloa
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glColor3f(r: GLfloat, g: GLfloat, b: GLfloat) {
     glColor4f(r, g, b, 1.0);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glColor4ub(r: GLubyte, g: GLubyte, b: GLubyte, a: GLubyte) {
     glColor4f(
         r as f32 / 255.0,
@@ -501,19 +468,16 @@ pub unsafe extern "C" fn glColor4ub(r: GLubyte, g: GLubyte, b: GLubyte, a: GLuby
     );
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glColor3ub(r: GLubyte, g: GLubyte, b: GLubyte) {
     glColor4ub(r, g, b, 255);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glColor4fv(v: *const GLfloat) {
     if !v.is_null() {
         glColor4f(*v.add(0), *v.add(1), *v.add(2), *v.add(3));
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glNormal3f(x: GLfloat, y: GLfloat, z: GLfloat) {
     with_context(|ctx| {
         ctx.current_normal = [x, y, z];
@@ -527,7 +491,6 @@ pub unsafe extern "C" fn glNormal3f(x: GLfloat, y: GLfloat, z: GLfloat) {
 // Display Lists
 // ============================================================================
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenLists(range: GLsizei) -> GLuint {
     if range <= 0 {
         return 0;
@@ -535,7 +498,6 @@ pub unsafe extern "C" fn glGenLists(range: GLsizei) -> GLuint {
     with_context(|ctx| ctx.display_lists.gen_lists(range as usize))
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteLists(list: GLuint, range: GLsizei) {
     if range <= 0 {
         return;
@@ -545,7 +507,6 @@ pub unsafe extern "C" fn glDeleteLists(list: GLuint, range: GLsizei) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glNewList(list: GLuint, mode: GLenum) {
     with_context(|ctx| {
         ctx.active_display_list = Some(crate::display_list::DisplayList::new(list));
@@ -553,7 +514,6 @@ pub unsafe extern "C" fn glNewList(list: GLuint, mode: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glEndList() {
     with_context(|ctx| {
         if let Some(list) = ctx.active_display_list.take() {
@@ -562,7 +522,6 @@ pub unsafe extern "C" fn glEndList() {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glCallList(list: GLuint) {
     with_context(|ctx| {
         if let Some(active) = &mut ctx.active_display_list {
@@ -575,7 +534,6 @@ pub unsafe extern "C" fn glCallList(list: GLuint) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glCallLists(n: GLsizei, type_: GLenum, lists: *const c_void) {
     if n <= 0 || lists.is_null() {
         return;
@@ -592,7 +550,6 @@ pub unsafe extern "C" fn glCallLists(n: GLsizei, type_: GLenum, lists: *const c_
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glIsList(list: GLuint) -> GLboolean {
     with_context(|ctx| {
         if ctx.display_lists.is_list(list) {
@@ -607,7 +564,6 @@ pub unsafe extern "C" fn glIsList(list: GLuint) -> GLboolean {
 // Textures
 // ============================================================================
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenTextures(n: GLsizei, textures: *mut GLuint) {
     if n <= 0 || textures.is_null() {
         return;
@@ -621,7 +577,6 @@ pub unsafe extern "C" fn glGenTextures(n: GLsizei, textures: *mut GLuint) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteTextures(n: GLsizei, textures: *const GLuint) {
     if n <= 0 || textures.is_null() {
         return;
@@ -632,7 +587,6 @@ pub unsafe extern "C" fn glDeleteTextures(n: GLsizei, textures: *const GLuint) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBindTexture(target: GLenum, texture: GLuint) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -642,7 +596,6 @@ pub unsafe extern "C" fn glBindTexture(target: GLenum, texture: GLuint) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexImage2D(
     _target: GLenum,
     level: GLint,
@@ -684,7 +637,6 @@ pub unsafe extern "C" fn glTexImage2D(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexSubImage2D(
     _target: GLenum,
     level: GLint,
@@ -719,7 +671,6 @@ pub unsafe extern "C" fn glTexSubImage2D(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexParameteri(_target: GLenum, pname: GLenum, param: GLint) {
     with_context(|ctx| {
         let tm = &mut ctx.texture_manager;
@@ -736,26 +687,22 @@ pub unsafe extern "C" fn glTexParameteri(_target: GLenum, pname: GLenum, param: 
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexParameterf(target: GLenum, pname: GLenum, param: GLfloat) {
     glTexParameteri(target, pname, param as GLint);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexParameteriv(target: GLenum, pname: GLenum, params: *const GLint) {
     if !params.is_null() {
         glTexParameteri(target, pname, *params);
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexParameterfv(target: GLenum, pname: GLenum, params: *const GLfloat) {
     if !params.is_null() {
         glTexParameterf(target, pname, *params);
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glActiveTexture(texture: GLenum) {
     with_context(|ctx| {
         let idx = (texture.saturating_sub(GL_TEXTURE0)) as usize;
@@ -765,7 +712,6 @@ pub unsafe extern "C" fn glActiveTexture(texture: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexImage1D(
     target: GLenum,
     level: GLint,
@@ -789,7 +735,6 @@ pub unsafe extern "C" fn glTexImage1D(
     );
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexImage3D(
     _target: GLenum,
     _level: GLint,
@@ -804,7 +749,6 @@ pub unsafe extern "C" fn glTexImage3D(
 ) {
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetTexLevelParameteri(
     _target: GLenum,
     _level: GLint,
@@ -827,26 +771,20 @@ pub unsafe extern "C" fn glGetTexLevelParameteri(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexGen(_coord: GLenum, _pname: GLenum, _param: GLfloat) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexGeni(_coord: GLenum, _pname: GLenum, _param: GLint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexEnvf(_target: GLenum, _pname: GLenum, _param: GLfloat) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexEnvi(_target: GLenum, _pname: GLenum, _param: GLint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glTexEnvfv(_target: GLenum, _pname: GLenum, _params: *const GLfloat) {}
 
 // ============================================================================
 // States and Enables
 // ============================================================================
 
-#[no_mangle]
 pub unsafe extern "C" fn glEnable(cap: GLenum) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -856,7 +794,6 @@ pub unsafe extern "C" fn glEnable(cap: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDisable(cap: GLenum) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -866,7 +803,6 @@ pub unsafe extern "C" fn glDisable(cap: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glIsEnabled(cap: GLenum) -> GLboolean {
     with_context(|ctx| {
         let is_on = match cap {
@@ -893,7 +829,6 @@ pub unsafe extern "C" fn glIsEnabled(cap: GLenum) -> GLboolean {
     })
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glAlphaFunc(func: GLenum, ref_val: GLclampf) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -904,7 +839,6 @@ pub unsafe extern "C" fn glAlphaFunc(func: GLenum, ref_val: GLclampf) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBlendFunc(sfactor: GLenum, dfactor: GLenum) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -919,7 +853,6 @@ pub unsafe extern "C" fn glBlendFunc(sfactor: GLenum, dfactor: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBlendColor(
     red: GLclampf,
     green: GLclampf,
@@ -931,7 +864,6 @@ pub unsafe extern "C" fn glBlendColor(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBlendFuncSeparate(
     srcRGB: GLenum,
     dstRGB: GLenum,
@@ -946,7 +878,6 @@ pub unsafe extern "C" fn glBlendFuncSeparate(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDepthFunc(func: GLenum) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -956,7 +887,6 @@ pub unsafe extern "C" fn glDepthFunc(func: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDepthMask(flag: GLboolean) {
     with_context(|ctx| {
         let enable = flag != GL_FALSE;
@@ -967,7 +897,6 @@ pub unsafe extern "C" fn glDepthMask(flag: GLboolean) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glColorMask(
     red: GLboolean,
     green: GLboolean,
@@ -984,7 +913,6 @@ pub unsafe extern "C" fn glColorMask(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glCullFace(mode: GLenum) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -994,14 +922,12 @@ pub unsafe extern "C" fn glCullFace(mode: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFrontFace(mode: GLenum) {
     with_context(|ctx| {
         ctx.front_face = mode;
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glPolygonOffset(factor: GLfloat, units: GLfloat) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -1014,21 +940,18 @@ pub unsafe extern "C" fn glPolygonOffset(factor: GLfloat, units: GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glLineWidth(width: GLfloat) {
     with_context(|ctx| {
         ctx.line_width = width;
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glPointSize(size: GLfloat) {
     with_context(|ctx| {
         ctx.point_size = size;
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glShadeModel(mode: GLenum) {
     with_context(|ctx| {
         if let Some(list) = &mut ctx.active_display_list {
@@ -1038,14 +961,12 @@ pub unsafe extern "C" fn glShadeModel(mode: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glColorMaterial(_face: GLenum, _mode: GLenum) {
     with_context(|ctx| {
         ctx.color_material_enabled = true;
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFogf(pname: GLenum, param: GLfloat) {
     with_context(|ctx| match pname {
         GL_FOG_START => ctx.fog_start = param,
@@ -1056,7 +977,6 @@ pub unsafe extern "C" fn glFogf(pname: GLenum, param: GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFogfv(pname: GLenum, params: *const GLfloat) {
     if params.is_null() {
         return;
@@ -1075,12 +995,10 @@ pub unsafe extern "C" fn glFogfv(pname: GLenum, params: *const GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFogi(pname: GLenum, param: GLint) {
     glFogf(pname, param as GLfloat);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFogx(pname: GLenum, param: GLfixed) {
     if pname == GL_FOG_MODE {
         glFogf(pname, param as GLfloat);
@@ -1089,7 +1007,6 @@ pub unsafe extern "C" fn glFogx(pname: GLenum, param: GLfixed) {
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFogxv(pname: GLenum, params: *const GLfixed) {
     if params.is_null() {
         return;
@@ -1108,7 +1025,6 @@ pub unsafe extern "C" fn glFogxv(pname: GLenum, params: *const GLfixed) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glHint(target: GLenum, mode: GLenum) {
     match mode {
         GL_DONT_CARE | GL_FASTEST | GL_NICEST => {}
@@ -1122,27 +1038,22 @@ pub unsafe extern "C" fn glHint(target: GLenum, mode: GLenum) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDepthRangef(n: GLclampf, f: GLclampf) {
     with_context(|ctx| {
         ctx.depth_range = (n.clamp(0.0, 1.0), f.clamp(0.0, 1.0));
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDepthRange(n: GLclampd, f: GLclampd) {
     glDepthRangef(n as GLclampf, f as GLclampf);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDepthRangex(n: GLclampx, f: GLclampx) {
     glDepthRangef(clampx_to_float(n), clampx_to_float(f));
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glLightf(_light: GLenum, _pname: GLenum, _param: GLfloat) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glLightfv(light: GLenum, pname: GLenum, params: *const GLfloat) {
     if params.is_null() {
         return;
@@ -1189,10 +1100,8 @@ pub unsafe extern "C" fn glLightfv(light: GLenum, pname: GLenum, params: *const 
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glLightModelf(_pname: GLenum, _param: GLfloat) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glLightModelfv(pname: GLenum, params: *const GLfloat) {
     if params.is_null() {
         return;
@@ -1209,10 +1118,8 @@ pub unsafe extern "C" fn glLightModelfv(pname: GLenum, params: *const GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glMaterialf(_face: GLenum, _pname: GLenum, _param: GLfloat) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glMaterialfv(_face: GLenum, pname: GLenum, params: *const GLfloat) {
     if params.is_null() {
         return;
@@ -1234,7 +1141,6 @@ pub unsafe extern "C" fn glMaterialfv(_face: GLenum, pname: GLenum, params: *con
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glStencilFunc(func: GLenum, ref_val: GLint, mask: GLuint) {
     with_context(|ctx| {
         ctx.stencil_func = func;
@@ -1243,14 +1149,12 @@ pub unsafe extern "C" fn glStencilFunc(func: GLenum, ref_val: GLint, mask: GLuin
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glStencilMask(mask: GLuint) {
     with_context(|ctx| {
         ctx.stencil_writemask = mask;
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glStencilOp(fail: GLenum, zfail: GLenum, zpass: GLenum) {
     with_context(|ctx| {
         ctx.stencil_fail = fail;
@@ -1259,21 +1163,18 @@ pub unsafe extern "C" fn glStencilOp(fail: GLenum, zfail: GLenum, zpass: GLenum)
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glViewport(x: GLint, y: GLint, width: GLsizei, height: GLsizei) {
     with_context(|ctx| {
         ctx.viewport = (x, y, width, height);
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glScissor(x: GLint, y: GLint, width: GLsizei, height: GLsizei) {
     with_context(|ctx| {
         ctx.scissor = (x, y, width, height);
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glClearColor(
     red: GLclampf,
     green: GLclampf,
@@ -1285,26 +1186,22 @@ pub unsafe extern "C" fn glClearColor(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glClearDepthf(depth: GLclampf) {
     with_context(|ctx| {
         ctx.clear_depth = depth;
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glClearDepth(depth: GLclampd) {
     glClearDepthf(depth as GLclampf);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glClearStencil(s: GLint) {
     with_context(|ctx| {
         ctx.clear_stencil = s;
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glClear(mask: GLbitfield) {
     with_context(|ctx| {
         let mut hal_mask = 0u32;
@@ -1321,10 +1218,8 @@ pub unsafe extern "C" fn glClear(mask: GLbitfield) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glPixelStorei(_pname: GLenum, _param: GLint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glReadPixels(
     _x: GLint,
     _y: GLint,
@@ -1343,7 +1238,6 @@ pub unsafe extern "C" fn glReadPixels(
     // MISSING: readback via hal CopyImageToBuffer (Phase 2/4).
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFlush() {
     with_context(|ctx| {
         let cmd = core::mem::take(&mut ctx.command_buffer);
@@ -1351,11 +1245,9 @@ pub unsafe extern "C" fn glFlush() {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glFinish() {
     glFlush();
 }
-#[no_mangle]
 pub unsafe extern "C" fn glGetIntegerv(pname: GLenum, params: *mut GLint) {
     if params.is_null() {
         return;
@@ -1395,7 +1287,6 @@ pub unsafe extern "C" fn glGetIntegerv(pname: GLenum, params: *mut GLint) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetFloatv(pname: GLenum, params: *mut GLfloat) {
     if params.is_null() {
         return;
@@ -1427,7 +1318,6 @@ pub unsafe extern "C" fn glGetFloatv(pname: GLenum, params: *mut GLfloat) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetBooleanv(pname: GLenum, params: *mut GLboolean) {
     if params.is_null() {
         return;
@@ -1435,7 +1325,6 @@ pub unsafe extern "C" fn glGetBooleanv(pname: GLenum, params: *mut GLboolean) {
     *params = glIsEnabled(pname);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetString(name: GLenum) -> *const GLubyte {
     match name {
         GL_VENDOR => b"Vantage\0".as_ptr(),
@@ -1449,7 +1338,6 @@ pub unsafe extern "C" fn glGetString(name: GLenum) -> *const GLubyte {
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetError() -> GLenum {
     with_context(|ctx| {
         let err = ctx.error;
@@ -1458,16 +1346,12 @@ pub unsafe extern "C" fn glGetError() -> GLenum {
     })
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glPushAttrib(_mask: GLbitfield) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glPopAttrib() {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glPushClientAttrib(_mask: GLbitfield) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glPopClientAttrib() {}
 
 // ============================================================================
@@ -1475,14 +1359,12 @@ pub unsafe extern "C" fn glPopClientAttrib() {}
 // ============================================================================
 
 /// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend (planned: pliron-based codegen, see prism vulcan-glsl).
-#[no_mangle]
 pub unsafe extern "C" fn glCreateShader(_shader_type: GLenum) -> GLuint {
     set_gl_error(GL_INVALID_OPERATION);
     0
 }
 
 /// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
-#[no_mangle]
 pub unsafe extern "C" fn glShaderSource(
     _shader: GLuint,
     _count: GLsizei,
@@ -1493,12 +1375,10 @@ pub unsafe extern "C" fn glShaderSource(
 }
 
 /// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
-#[no_mangle]
 pub unsafe extern "C" fn glCompileShader(_shader: GLuint) {
     set_gl_error(GL_INVALID_OPERATION);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetShaderiv(_shader: GLuint, pname: GLenum, params: *mut GLint) {
     if !params.is_null() {
         if pname == GL_COMPILE_STATUS {
@@ -1509,7 +1389,6 @@ pub unsafe extern "C" fn glGetShaderiv(_shader: GLuint, pname: GLenum, params: *
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetShaderInfoLog(
     _shader: GLuint,
     _buf_size: GLsizei,
@@ -1524,32 +1403,26 @@ pub unsafe extern "C" fn glGetShaderInfoLog(
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteShader(_shader: GLuint) {}
 
 /// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
-#[no_mangle]
 pub unsafe extern "C" fn glCreateProgram() -> GLuint {
     set_gl_error(GL_INVALID_OPERATION);
     0
 }
 
 /// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
-#[no_mangle]
 pub unsafe extern "C" fn glAttachShader(_program: GLuint, _shader: GLuint) {
     set_gl_error(GL_INVALID_OPERATION);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDetachShader(_program: GLuint, _shader: GLuint) {}
 
 /// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
-#[no_mangle]
 pub unsafe extern "C" fn glLinkProgram(_program: GLuint) {
     set_gl_error(GL_INVALID_OPERATION);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetProgramiv(_program: GLuint, pname: GLenum, params: *mut GLint) {
     if !params.is_null() {
         if pname == GL_LINK_STATUS {
@@ -1560,7 +1433,6 @@ pub unsafe extern "C" fn glGetProgramiv(_program: GLuint, pname: GLenum, params:
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetProgramInfoLog(
     _program: GLuint,
     _buf_size: GLsizei,
@@ -1576,31 +1448,23 @@ pub unsafe extern "C" fn glGetProgramInfoLog(
 }
 
 /// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
-#[no_mangle]
 pub unsafe extern "C" fn glUseProgram(_program: GLuint) {
     set_gl_error(GL_INVALID_OPERATION);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteProgram(_program: GLuint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetUniformLocation(_program: GLuint, _name: *const GLchar) -> GLint {
     -1
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetAttribLocation(_program: GLuint, _name: *const GLchar) -> GLint {
     -1
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glUniform1f(_location: GLint, _v0: GLfloat) {}
-#[no_mangle]
 pub unsafe extern "C" fn glUniform2f(_location: GLint, _v0: GLfloat, _v1: GLfloat) {}
-#[no_mangle]
 pub unsafe extern "C" fn glUniform3f(_location: GLint, _v0: GLfloat, _v1: GLfloat, _v2: GLfloat) {}
-#[no_mangle]
 pub unsafe extern "C" fn glUniform4f(
     _location: GLint,
     _v0: GLfloat,
@@ -1609,13 +1473,9 @@ pub unsafe extern "C" fn glUniform4f(
     _v3: GLfloat,
 ) {
 }
-#[no_mangle]
 pub unsafe extern "C" fn glUniform1i(_location: GLint, _v0: GLint) {}
-#[no_mangle]
 pub unsafe extern "C" fn glUniform2i(_location: GLint, _v0: GLint, _v1: GLint) {}
-#[no_mangle]
 pub unsafe extern "C" fn glUniform3i(_location: GLint, _v0: GLint, _v1: GLint, _v2: GLint) {}
-#[no_mangle]
 pub unsafe extern "C" fn glUniform4i(
     _location: GLint,
     _v0: GLint,
@@ -1624,7 +1484,6 @@ pub unsafe extern "C" fn glUniform4i(
     _v3: GLint,
 ) {
 }
-#[no_mangle]
 pub unsafe extern "C" fn glUniformMatrix4fv(
     _location: GLint,
     _count: GLsizei,
@@ -1633,7 +1492,6 @@ pub unsafe extern "C" fn glUniformMatrix4fv(
 ) {
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenBuffers(n: GLsizei, buffers: *mut GLuint) {
     if n <= 0 || buffers.is_null() {
         return;
@@ -1648,12 +1506,10 @@ pub unsafe extern "C" fn glGenBuffers(n: GLsizei, buffers: *mut GLuint) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenBuffersARB(n: GLsizei, buffers: *mut GLuint) {
     glGenBuffers(n, buffers);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBindBuffer(target: GLenum, buffer: GLuint) {
     with_context(|ctx| {
         ctx.ensure_buffer(buffer);
@@ -1664,12 +1520,10 @@ pub unsafe extern "C" fn glBindBuffer(target: GLenum, buffer: GLuint) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBindBufferARB(target: GLenum, buffer: GLuint) {
     glBindBuffer(target, buffer);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBufferData(
     target: GLenum,
     size: GLsizeiptr,
@@ -1698,7 +1552,6 @@ pub unsafe extern "C" fn glBufferData(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBufferDataARB(
     target: GLenum,
     size: GLsizeiptr,
@@ -1708,7 +1561,6 @@ pub unsafe extern "C" fn glBufferDataARB(
     glBufferData(target, size, data, usage);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBufferSubData(
     target: GLenum,
     offset: GLintptr,
@@ -1740,7 +1592,6 @@ pub unsafe extern "C" fn glBufferSubData(
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteBuffers(n: GLsizei, buffers: *const GLuint) {
     if n <= 0 || buffers.is_null() {
         return;
@@ -1759,12 +1610,10 @@ pub unsafe extern "C" fn glDeleteBuffers(n: GLsizei, buffers: *const GLuint) {
     });
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteBuffersARB(n: GLsizei, buffers: *const GLuint) {
     glDeleteBuffers(n, buffers);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glVertexAttribPointer(
     _index: GLuint,
     _size: GLint,
@@ -1775,13 +1624,10 @@ pub unsafe extern "C" fn glVertexAttribPointer(
 ) {
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glEnableVertexAttribArray(_index: GLuint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glDisableVertexAttribArray(_index: GLuint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenFramebuffers(n: GLsizei, framebuffers: *mut GLuint) {
     if n <= 0 || framebuffers.is_null() {
         return;
@@ -1791,10 +1637,8 @@ pub unsafe extern "C" fn glGenFramebuffers(n: GLsizei, framebuffers: *mut GLuint
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBindFramebuffer(_target: GLenum, _framebuffer: GLuint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glFramebufferTexture2D(
     _target: GLenum,
     _attachment: GLenum,
@@ -1804,16 +1648,13 @@ pub unsafe extern "C" fn glFramebufferTexture2D(
 ) {
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteFramebuffers(_n: GLsizei, _framebuffers: *const GLuint) {}
 
 /// MISSING: Framebuffer object status — unsupported in fixed-function core.
-#[no_mangle]
 pub unsafe extern "C" fn glCheckFramebufferStatus(_target: GLenum) -> GLenum {
     GL_FRAMEBUFFER_UNSUPPORTED
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenRenderbuffers(n: GLsizei, renderbuffers: *mut GLuint) {
     if n <= 0 || renderbuffers.is_null() {
         return;
@@ -1823,10 +1664,8 @@ pub unsafe extern "C" fn glGenRenderbuffers(n: GLsizei, renderbuffers: *mut GLui
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBindRenderbuffer(_target: GLenum, _renderbuffer: GLuint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glRenderbufferStorage(
     _target: GLenum,
     _internalformat: GLenum,
@@ -1835,13 +1674,10 @@ pub unsafe extern "C" fn glRenderbufferStorage(
 ) {
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteRenderbuffers(_n: GLsizei, _renderbuffers: *const GLuint) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenerateMipmap(_target: GLenum) {}
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenQueries(n: GLsizei, ids: *mut GLuint) {
     if n <= 0 || ids.is_null() {
         return;
@@ -1851,40 +1687,31 @@ pub unsafe extern "C" fn glGenQueries(n: GLsizei, ids: *mut GLuint) {
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGenQueriesARB(n: GLsizei, ids: *mut GLuint) {
     glGenQueries(n, ids);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glBeginQuery(_target: GLenum, _id: GLuint) {}
-#[no_mangle]
 pub unsafe extern "C" fn glBeginQueryARB(target: GLenum, id: GLuint) {
     glBeginQuery(target, id);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glEndQuery(_target: GLenum) {}
-#[no_mangle]
 pub unsafe extern "C" fn glEndQueryARB(target: GLenum) {
     glEndQuery(target);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetQueryObjectuiv(_id: GLuint, _pname: GLenum, params: *mut GLuint) {
     if !params.is_null() {
         *params = 1;
     }
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glGetQueryObjectuivARB(id: GLuint, pname: GLenum, params: *mut GLuint) {
     glGetQueryObjectuiv(id, pname, params);
 }
 
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteQueries(_n: GLsizei, _ids: *const GLuint) {}
-#[no_mangle]
 pub unsafe extern "C" fn glDeleteQueriesARB(n: GLsizei, ids: *const GLuint) {
     glDeleteQueries(n, ids);
 }

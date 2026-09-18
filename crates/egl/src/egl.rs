@@ -1,5 +1,7 @@
 //! EGL 1.4 API implementation and context/surface management.
 #![allow(unused_imports, dead_code)]
+#[cfg(all(feature = "std", target_os = "linux"))]
+use crate::platform::x11::x11_shm::X11ShmSurface;
 use vantage_gles::display_list::DisplayListRegistry;
 use vantage_gles::gl_context::{
     set_current_gl_context, GlContext, CURRENT_CONTEXT,
@@ -21,6 +23,10 @@ pub struct EglSurfaceState {
     pub height: u32,
     pub native_window: NativeWindowType,
     pub swap_interval: EGLint,
+    pub hal_color_image: Option<vantage_hal::ImageId>,
+    pub hal_depth_image: Option<vantage_hal::ImageId>,
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    pub x11_surface: Option<X11ShmSurface>,
 }
 
 pub struct EglContextState {
@@ -244,8 +250,8 @@ pub unsafe fn egl_choose_config(
     }
     EGL_TRUE
 }
-static STRING_VENDOR: &[u8] = b"angle_wgpu\0";
-static STRING_VERSION: &[u8] = b"1.4 angle_wgpu EGL 1.4\0";
+static STRING_VENDOR: &[u8] = b"Vantage\0";
+static STRING_VERSION: &[u8] = b"1.4 Vantage EGL 1.4\0";
 static STRING_CLIENT_APIS: &[u8] = b"OpenGL_ES \0";
 static STRING_EXTENSIONS: &[u8] = b"EGL_KHR_create_context EGL_KHR_surfaceless_context \
 EGL_KHR_image_base EGL_KHR_fence_sync EGL_KHR_wait_sync EGL_KHR_get_all_proc_addresses\0";
@@ -374,19 +380,30 @@ pub unsafe fn egl_create_window_surface(
         d.next_surface_id.fetch_add(1, Ordering::SeqCst)
     };
 
-    // MISSING: presentation (Phase 3) — X11 MIT-SHM surface backing. Every
-    // surface-creation path fails with EGL_BAD_ALLOC until the hal image +
-    // X11 backend are wired.
-    set_egl_error(EGL_BAD_ALLOC);
-    return EGL_NO_SURFACE;
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    let x11_surface = if (win as usize) != 0 {
+        let dpy_ptr = native_display_ptr() as *mut crate::platform::x11::x11_shm::Display;
+        match unsafe { X11ShmSurface::new(dpy_ptr, win as u64, width, height) } {
+            Ok(s) => Some(s),
+            Err(_) => {
+                set_egl_error(EGL_BAD_ALLOC);
+                return EGL_NO_SURFACE;
+            }
+        }
+    } else {
+        None
+    };
 
-    #[allow(unreachable_code)]
     let surface_state = Arc::new(Mutex::new(EglSurfaceState {
         id,
         width,
         height,
         native_window: win,
         swap_interval: 0,
+        hal_color_image: None,
+        hal_depth_image: None,
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        x11_surface,
     }));
 
     {
@@ -418,12 +435,23 @@ pub unsafe fn egl_create_native_window_surface(
         return EGL_NO_SURFACE;
     }
 
-    // MISSING: presentation (Phase 3) — X11 MIT-SHM surface backing.
-    let _ = n;
-    set_egl_error(EGL_BAD_ALLOC);
-    return EGL_NO_SURFACE;
+    let width = if n.width == 0 { 800 } else { n.width }.max(1);
+    let height = if n.height == 0 { 600 } else { n.height }.max(1);
 
-    #[allow(unreachable_code)]
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    let x11_surface = if n.kind == ANGLE_WGPU_NATIVE_X11 {
+        let dpy_ptr = n.display as *mut crate::platform::x11::x11_shm::Display;
+        match unsafe { X11ShmSurface::new(dpy_ptr, n.window, width, height) } {
+            Ok(s) => Some(s),
+            Err(_) => {
+                set_egl_error(EGL_BAD_ALLOC);
+                return EGL_NO_SURFACE;
+            }
+        }
+    } else {
+        None
+    };
+
     let dpy_arc = if !dpy.is_null() {
         Arc::from_raw(dpy as *const Mutex<EglDisplayState>)
     } else {
@@ -435,13 +463,16 @@ pub unsafe fn egl_create_native_window_surface(
         d.next_surface_id.fetch_add(1, Ordering::SeqCst)
     };
 
-    #[allow(unreachable_code)]
     let surface_state = Arc::new(Mutex::new(EglSurfaceState {
         id,
-        width: 1,
-        height: 1,
-        native_window: 0 as NativeWindowType,
+        width,
+        height,
+        native_window: n.window as NativeWindowType,
         swap_interval: 0,
+        hal_color_image: None,
+        hal_depth_image: None,
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        x11_surface,
     }));
 
     {
@@ -566,6 +597,24 @@ pub unsafe fn egl_make_current(
             let mut gl = gl_ctx.lock();
             gl.viewport = (0, 0, w as i32, h as i32);
             gl.scissor = (0, 0, w as i32, h as i32);
+
+            let mut surf = surf_arc.lock();
+            if surf.hal_color_image.is_none() {
+                let c_img = gl.hal_device.create_image(vantage_hal::Format::R8G8B8A8Unorm, w, h);
+                let d_img = gl.hal_device.create_image(vantage_hal::Format::D32Sfloat, w, h);
+                surf.hal_color_image = Some(c_img);
+                surf.hal_depth_image = Some(d_img);
+            }
+            let c_img = surf.hal_color_image;
+            let d_img = surf.hal_depth_image;
+            gl.color_image = c_img;
+            gl.depth_image = d_img;
+
+            gl.command_buffer.push(vantage_hal::Cmd::BindAttachments {
+                color: c_img,
+                depth: d_img,
+                stencil: None,
+            });
         }
 
         *CURRENT_SURFACE.lock() = Some(surf_arc);
@@ -624,9 +673,28 @@ pub unsafe fn egl_swap_buffers(_dpy: EGLDisplay, surface: EGLSurface) -> EGLBool
         return EGL_FALSE;
     }
 
-    // MISSING: presentation (Phase 3) — flush the current context's hal
-    // command buffer and blit to the X11 SHM image. Phase 0: no-op.
-    core::mem::forget(Arc::from_raw(surface as *const Mutex<EglSurfaceState>));
+    let surf_arc = Arc::from_raw(surface as *const Mutex<EglSurfaceState>);
+    if let Some(ctx_arc) = vantage_gles::gl_context::get_current_gl_context() {
+        let mut ctx = ctx_arc.lock();
+        let cmd = core::mem::take(&mut ctx.command_buffer);
+        ctx.hal_device.submit(&cmd);
+
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        {
+            let mut surf = surf_arc.lock();
+            let c_id_opt = surf.hal_color_image;
+            if let Some(ref mut x11) = surf.x11_surface {
+                if let Some(c_id) = c_id_opt {
+                    if let Some(img) = ctx.hal_device.image(c_id) {
+                        unsafe {
+                            x11.present(&img.data, (img.width * 4) as usize);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    core::mem::forget(surf_arc);
     EGL_TRUE
 }
 
