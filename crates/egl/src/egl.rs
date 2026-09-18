@@ -14,7 +14,6 @@ use alloc::collections::BTreeMap as HashMap;
 use alloc::sync::Arc;
 use core::ffi::{c_void, CStr};
 use core::sync::atomic::{AtomicU32, Ordering};
-// MISSING: X11 MIT-SHM presentation backend (Phase 5). Until it lands,
 // every surface-creation path returns EGL_BAD_ALLOC.
 
 pub struct EglSurfaceState {
