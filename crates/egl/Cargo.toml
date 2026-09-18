@@ -9,7 +9,7 @@ description = "EGL 1.4 + X11/MIT-SHM presentation for the Vantage software drive
 name = "vantage_egl"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
-
+[features]
 default = ["std", "capi"]
 std = ["dep:libloading", "vantage-gles/std"]
 capi = []
