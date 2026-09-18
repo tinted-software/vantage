@@ -202,6 +202,12 @@ pub struct GlContext {
     pub display_list_mode: GLenum,
 
     pub error: GLenum,
+
+    // HAL device & recorded commands
+    pub hal_device: vantage_hal::Device,
+    pub command_buffer: vantage_hal::CommandBuffer,
+    pub color_image: Option<vantage_hal::ImageId>,
+    pub depth_image: Option<vantage_hal::ImageId>,
 }
 
 unsafe impl Send for GlContext {}
@@ -314,6 +320,10 @@ impl GlContext {
             active_display_list: None,
             display_list_mode: GL_COMPILE,
             error: GL_NO_ERROR,
+            hal_device: vantage_hal::Device::new(),
+            command_buffer: vantage_hal::CommandBuffer::default(),
+            color_image: None,
+            depth_image: None,
         }
     }
 
@@ -623,11 +633,149 @@ impl GlContext {
             }
         }
 
-        // MISSING: presentation backend (Phase 4) — vertex data is validated
-        // and quad-expanded, then recorded into the hal command buffer.
-        let _ = (vertices, indices);
-        let _key = self.build_pipeline_key(mode);
-        let _uniforms = self.build_uniforms();
+        let (final_vertices, final_indices): (&[VertexData], Option<alloc::borrow::Cow<[u32]>>) =
+            if mode == GL_QUADS {
+                let quad_count = vertices.len() / 4;
+                let mut inds = Vec::with_capacity(quad_count * 6);
+                for q in 0..quad_count as u32 {
+                    let base = q * 4;
+                    inds.push(base + 0);
+                    inds.push(base + 1);
+                    inds.push(base + 2);
+                    inds.push(base + 0);
+                    inds.push(base + 2);
+                    inds.push(base + 3);
+                }
+                (vertices, Some(alloc::borrow::Cow::Owned(inds)))
+            } else if let Some(inds) = indices {
+                (vertices, Some(alloc::borrow::Cow::Borrowed(inds)))
+            } else {
+                (vertices, None)
+            };
+
+        let mv = self.modelview_stack.current.0;
+        let proj = self.projection_stack.current.0;
+        let mvp = proj.mul_mat4(&mv);
+
+        let mut transformed = Vec::with_capacity(final_vertices.len());
+        for v in final_vertices {
+            // Transform position by MVP matrix
+            let p = glam::Vec4::new(v.position[0], v.position[1], v.position[2], 1.0);
+            let clip = mvp.mul_vec4(p);
+
+            // In GLES 1.1, lighting & color material are applied per vertex on CPU
+            let mut color = v.color;
+            if self.lighting_enabled {
+                let mut lit_rgb = [
+                    self.light_model_ambient[0] * color[0],
+                    self.light_model_ambient[1] * color[1],
+                    self.light_model_ambient[2] * color[2],
+                ];
+                let norm = glam::Vec3::new(v.normal[0], v.normal[1], v.normal[2]);
+                let norm = if self.normalize_enabled { norm.normalize_or_zero() } else { norm };
+
+                for i in 0..8 {
+                    if self.lights_enabled[i] {
+                        let l = &self.lights[i];
+                        let ldir = glam::Vec3::new(l.position[0], l.position[1], l.position[2]).normalize_or_zero();
+                        let n_dot_l = norm.dot(ldir).max(0.0);
+
+                        lit_rgb[0] += l.ambient[0] * color[0] + l.diffuse[0] * color[0] * n_dot_l;
+                        lit_rgb[1] += l.ambient[1] * color[1] + l.diffuse[1] * color[1] * n_dot_l;
+                        lit_rgb[2] += l.ambient[2] * color[2] + l.diffuse[2] * color[2] * n_dot_l;
+                    }
+                }
+                color = [lit_rgb[0].min(1.0), lit_rgb[1].min(1.0), lit_rgb[2].min(1.0), color[3]];
+            }
+
+            // Eye distance for fog
+            let eye_p = mv.mul_vec4(p);
+            let eye_z = -eye_p.z.abs();
+
+            transformed.push(vantage_raster::Vertex {
+                pos: [clip.x, clip.y, clip.z, clip.w],
+                color,
+                tex0: [v.tex_coord[0], v.tex_coord[1]],
+                tex1: [0.0, 0.0],
+                fog: eye_z,
+                _pad: 0.0,
+            });
+        }
+
+        // Upload transformed vertex data into a HAL buffer
+        let v_bytes: &[u8] = bytemuck::cast_slice(&transformed);
+        let v_buf = self.hal_device.create_buffer(v_bytes.len() as u64);
+        if let Some(buf) = self.hal_device.buffer_mut(v_buf) {
+            buf.data.copy_from_slice(v_bytes);
+        }
+
+        let i_buf_opt = if let Some(ref inds) = final_indices {
+            let i_bytes: &[u8] = bytemuck::cast_slice(inds.as_ref());
+            let i_buf = self.hal_device.create_buffer(i_bytes.len() as u64);
+            if let Some(buf) = self.hal_device.buffer_mut(i_buf) {
+                buf.data.copy_from_slice(i_bytes);
+            }
+            Some(i_buf)
+        } else {
+            None
+        };
+
+        // Create pipeline
+        let key = self.build_pipeline_key(mode);
+        let pipe = self.hal_device.create_pipeline(vantage_hal::Pipeline {
+            topology: key.topology,
+            cull_mode: key.cull_mode,
+            front_face_ccw: key.front_face_ccw,
+            blend_enabled: key.blend_enabled,
+            src_factor: key.src_factor,
+            dst_factor: key.dst_factor,
+            depth_test: key.depth_test,
+            depth_write: key.depth_write,
+            depth_func: key.depth_func,
+            color_mask: key.color_mask,
+        });
+
+        // Record draw commands
+        self.command_buffer.push(vantage_hal::Cmd::BindPipeline { pipeline: pipe });
+        self.command_buffer.push(vantage_hal::Cmd::SetViewport {
+            x: self.viewport.0,
+            y: self.viewport.1,
+            w: self.viewport.2.max(1) as u32,
+            h: self.viewport.3.max(1) as u32,
+        });
+        if self.scissor_test_enabled {
+            self.command_buffer.push(vantage_hal::Cmd::SetScissor {
+                x: self.scissor.0,
+                y: self.scissor.1,
+                w: self.scissor.2.max(1) as u32,
+                h: self.scissor.3.max(1) as u32,
+            });
+        }
+
+        let mut v_buffers = smallvec::SmallVec::new();
+        v_buffers.push((v_buf, 0));
+        self.command_buffer.push(vantage_hal::Cmd::BindVertexBuffers {
+            first: 0,
+            buffers: v_buffers,
+        });
+
+        if let Some(i_buf) = i_buf_opt {
+            let num_inds = final_indices.as_ref().unwrap().len() as u32;
+            self.command_buffer.push(vantage_hal::Cmd::BindIndexBuffer {
+                buffer: i_buf,
+                offset: 0,
+                index_ty: vantage_hal::IndexType::U32,
+            });
+            self.command_buffer.push(vantage_hal::Cmd::DrawIndexed {
+                count: num_inds,
+                first: 0,
+            });
+        } else {
+            self.command_buffer.push(vantage_hal::Cmd::Draw {
+                count: transformed.len() as u32,
+                first: 0,
+            });
+        }
     }
 
     pub fn call_display_list(&mut self, list_id: GLuint) {

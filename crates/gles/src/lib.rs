@@ -242,6 +242,16 @@ pub unsafe extern "C" fn glLoadMatrixf(m: *const GLfloat) {
 }
 
 // ============================================================================
+
+#[inline]
+fn set_gl_error(err: GLenum) {
+    with_context(|ctx| {
+        if ctx.error == GL_NO_ERROR {
+            ctx.error = err;
+        }
+    });
+}
+
 // Client State and Vertex Arrays
 // ============================================================================
 
@@ -1296,8 +1306,18 @@ pub unsafe extern "C" fn glClearStencil(s: GLint) {
 
 #[no_mangle]
 pub unsafe extern "C" fn glClear(mask: GLbitfield) {
-    with_context(|_ctx| {
-        // MISSING: clear executes at submit time against the hal image (Phase 4).
+    with_context(|ctx| {
+        let mut hal_mask = 0u32;
+        if (mask & GL_COLOR_BUFFER_BIT) != 0 { hal_mask |= 1; }
+        if (mask & GL_DEPTH_BUFFER_BIT) != 0 { hal_mask |= 2; }
+        if (mask & GL_STENCIL_BUFFER_BIT) != 0 { hal_mask |= 4; }
+
+        ctx.command_buffer.push(vantage_hal::Cmd::ClearAttachments {
+            color: ctx.clear_color,
+            depth: ctx.clear_depth,
+            stencil: ctx.clear_stencil as u8,
+            mask: hal_mask,
+        });
     });
 }
 
@@ -1325,8 +1345,9 @@ pub unsafe extern "C" fn glReadPixels(
 
 #[no_mangle]
 pub unsafe extern "C" fn glFlush() {
-    with_context(|_ctx| {
-        // MISSING: submit context command buffer via hal Queue (Phase 4).
+    with_context(|ctx| {
+        let cmd = core::mem::take(&mut ctx.command_buffer);
+        ctx.hal_device.submit(&cmd);
     });
 }
 
@@ -1417,9 +1438,9 @@ pub unsafe extern "C" fn glGetBooleanv(pname: GLenum, params: *mut GLboolean) {
 #[no_mangle]
 pub unsafe extern "C" fn glGetString(name: GLenum) -> *const GLubyte {
     match name {
-        GL_VENDOR => b"angle_wgpu\0".as_ptr(),
-        GL_RENDERER => b"wgpu FixedFunction OpenGL ES 1.1/2.0 Emulation\0".as_ptr(),
-        GL_VERSION => b"OpenGL ES 2.0 (angle_wgpu)\0".as_ptr(),
+        GL_VENDOR => b"Vantage\0".as_ptr(),
+        GL_RENDERER => b"Vantage Software (pliron)\0".as_ptr(),
+        GL_VERSION => b"OpenGL ES-CM 1.1\0".as_ptr(),
         GL_EXTENSIONS => {
             b"GL_OES_texture_npot GL_OES_packed_depth_stencil GL_EXT_texture_format_BGRA8888\0"
                 .as_ptr()
@@ -1453,11 +1474,14 @@ pub unsafe extern "C" fn glPopClientAttrib() {}
 // GLES2 Shaders & Buffers & Programs
 // ============================================================================
 
+/// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend (planned: pliron-based codegen, see prism vulcan-glsl).
 #[no_mangle]
-pub unsafe extern "C" fn glCreateShader(shader_type: GLenum) -> GLuint {
-    shader_type
+pub unsafe extern "C" fn glCreateShader(_shader_type: GLenum) -> GLuint {
+    set_gl_error(GL_INVALID_OPERATION);
+    0
 }
 
+/// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
 #[no_mangle]
 pub unsafe extern "C" fn glShaderSource(
     _shader: GLuint,
@@ -1465,10 +1489,14 @@ pub unsafe extern "C" fn glShaderSource(
     _string: *const *const GLchar,
     _length: *const GLint,
 ) {
+    set_gl_error(GL_INVALID_OPERATION);
 }
 
+/// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
 #[no_mangle]
-pub unsafe extern "C" fn glCompileShader(_shader: GLuint) {}
+pub unsafe extern "C" fn glCompileShader(_shader: GLuint) {
+    set_gl_error(GL_INVALID_OPERATION);
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn glGetShaderiv(_shader: GLuint, pname: GLenum, params: *mut GLint) {
@@ -1499,19 +1527,27 @@ pub unsafe extern "C" fn glGetShaderInfoLog(
 #[no_mangle]
 pub unsafe extern "C" fn glDeleteShader(_shader: GLuint) {}
 
+/// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
 #[no_mangle]
 pub unsafe extern "C" fn glCreateProgram() -> GLuint {
-    1
+    set_gl_error(GL_INVALID_OPERATION);
+    0
 }
 
+/// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
 #[no_mangle]
-pub unsafe extern "C" fn glAttachShader(_program: GLuint, _shader: GLuint) {}
+pub unsafe extern "C" fn glAttachShader(_program: GLuint, _shader: GLuint) {
+    set_gl_error(GL_INVALID_OPERATION);
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn glDetachShader(_program: GLuint, _shader: GLuint) {}
 
+/// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
 #[no_mangle]
-pub unsafe extern "C" fn glLinkProgram(_program: GLuint) {}
+pub unsafe extern "C" fn glLinkProgram(_program: GLuint) {
+    set_gl_error(GL_INVALID_OPERATION);
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn glGetProgramiv(_program: GLuint, pname: GLenum, params: *mut GLint) {
@@ -1539,8 +1575,11 @@ pub unsafe extern "C" fn glGetProgramInfoLog(
     }
 }
 
+/// MISSING: GLES2 program pipeline — needs GLSL ES 1.00 -> pliron frontend.
 #[no_mangle]
-pub unsafe extern "C" fn glUseProgram(_program: GLuint) {}
+pub unsafe extern "C" fn glUseProgram(_program: GLuint) {
+    set_gl_error(GL_INVALID_OPERATION);
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn glDeleteProgram(_program: GLuint) {}
@@ -1768,9 +1807,10 @@ pub unsafe extern "C" fn glFramebufferTexture2D(
 #[no_mangle]
 pub unsafe extern "C" fn glDeleteFramebuffers(_n: GLsizei, _framebuffers: *const GLuint) {}
 
+/// MISSING: Framebuffer object status — unsupported in fixed-function core.
 #[no_mangle]
 pub unsafe extern "C" fn glCheckFramebufferStatus(_target: GLenum) -> GLenum {
-    GL_FRAMEBUFFER_COMPLETE
+    GL_FRAMEBUFFER_UNSUPPORTED
 }
 
 #[no_mangle]

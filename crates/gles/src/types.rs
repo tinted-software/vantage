@@ -498,3 +498,5 @@ pub const GL_OPERAND0_RGB: GLenum = 0x8590;
 pub const GL_OPERAND1_RGB: GLenum = 0x8591;
 pub const GL_OPERAND2_RGB: GLenum = 0x8592;
 pub const GL_RGB_SCALE: GLenum = 0x8573;
+
+pub const GL_FRAMEBUFFER_UNSUPPORTED: GLenum = 0x8CDD;

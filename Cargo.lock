@@ -549,6 +549,10 @@ dependencies = [
  "hashbrown",
  "libm",
  "lock_api",
+ "smallvec",
+ "vantage-hal",
+ "vantage-raster",
+ "vantage-shader",
 ]
 
 [[package]]
