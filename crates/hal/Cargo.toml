@@ -6,3 +6,6 @@ license = "MIT OR Apache-2.0"
 [features]
 default = ["std"]
 std = []
+[dependencies]
+hashbrown.workspace = true
+smallvec = { version = "1.16.1", default-features = false }
