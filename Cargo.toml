@@ -1,56 +1,21 @@
-[package]
-name = "angle_wgpu"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-description = "OpenGL ES 1.1/2.0 and EGL implemented on wgpu, with a C ABI."
-include = [
-    "src/**/*",
-    "cbindgen.toml",
-    "include/**/*",
-    "LICENSE.txt",
-]
+[workspace]
+members = ["crates/hal", "crates/raster", "crates/shader", "crates/gles", "crates/egl"]
+resolver = "3"
 
-[lib]
-name = "angle_wgpu"
-crate-type = ["rlib", "staticlib", "cdylib"]
-
-[features]
-default = ["capi"]
-std = [] 
-capi = []
-
-[dependencies]
+[workspace.dependencies]
 bytemuck = { version = "1.25.2", default-features = false, features = ["derive"] }
 glam = { version = "0.33.7", default-features = false, features = ["nostd-libm", "all-types"] }
-hashbrown = { version = "0.17.1", default-features = false, features = ["alloc"] }
-libloading = { version = "0.9.0", default-features = false }
+hashbrown = { version = "0.17.1", default-features = false, features = ["alloc", "default-hasher"] }
 lock_api = "0.4.14"
-raw-window-handle = { version = "0.6.2", default-features = false }
-wgpu = { git = "https://github.com/gfx-rs/wgpu", default-features = false, features = ["wgsl", "vulkan", "gles", "metal"] }
-zlib-rs = { version = "0.6.8", default-features = false, features = ["c-allocator"] }
-
-[profile.dev.package."*"]
-opt-level = 3
+libm = { version = "0.2.16", default-features = false }
 
 [profile.dev]
 opt-level = 2
 split-debuginfo = "packed"
+panic = "abort"
 
-[package.metadata.capi.library]
-name = "angle_wgpu"
+[profile.dev.package."*"]
+opt-level = 3
 
-[package.metadata.capi.pkg_config]
-filename = "glesv1_cm"
-name = "glesv1_cm"
-library = "angle_wgpu"
-
-[package.metadata.capi.install.include]
-asset = [
-    { from = "include/**/*", to = "." }
-]
-
-[package.metadata.capi.install.data]
-asset = [
-    { from = "glvnd/egl_vendor.d/10_angle_wgpu.json", to = "glvnd/egl_vendor.d" },
-]
+[profile.release]
+panic = "abort"

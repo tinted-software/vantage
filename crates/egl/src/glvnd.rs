@@ -11,7 +11,7 @@
 use crate::egl;
 use crate::eglBindAPI;
 use crate::eglCreatePixmapSurface;
-use crate::types::*;
+use vantage_gles::types::*;
 use alloc::sync::Arc;
 use core::ffi::{c_char, c_void, CStr};
 

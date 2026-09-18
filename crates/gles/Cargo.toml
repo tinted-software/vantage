@@ -1,0 +1,21 @@
+[package]
+name = "vantage-gles"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "OpenGL ES 1.1 (CM) state machine and C ABI entry points for Vantage."
+
+[lib]
+name = "vantage_gles"
+crate-type = ["rlib"]
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+hashbrown.workspace = true
+lock_api.workspace = true
+libm.workspace = true

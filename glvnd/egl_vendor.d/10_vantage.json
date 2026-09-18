@@ -1,6 +1,6 @@
 {
   "file_format_version": "1.0.0",
   "ICD": {
-    "library_path": "libangle_wgpu.so"
+    "library_path": "libvantage.so.0"
   }
 }

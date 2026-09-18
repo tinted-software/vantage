@@ -1,4 +1,4 @@
-//! OpenGL texture state management and wgpu texture/sampler synchronization.
+//! OpenGL texture state management (CPU-side; upload to the hal happens at draw time).
 
 use crate::types::*;
 use alloc::vec;
@@ -26,11 +26,6 @@ pub struct TextureObject {
     pub level_data: HashMap<u32, Vec<u8>>,
     pub dirty: bool,
 
-    // GPU resources
-    pub gpu_texture: Option<wgpu::Texture>,
-    pub gpu_view: Option<wgpu::TextureView>,
-    pub gpu_sampler: Option<wgpu::Sampler>,
-    pub gpu_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl TextureObject {
@@ -54,10 +49,6 @@ impl TextureObject {
             max_level: 1000,
             level_data: HashMap::new(),
             dirty: true,
-            gpu_texture: None,
-            gpu_view: None,
-            gpu_sampler: None,
-            gpu_bind_group: None,
         }
     }
 
@@ -134,158 +125,6 @@ impl TextureObject {
         }
 
         self.dirty = true;
-    }
-
-    pub fn get_wgpu_sampler_descriptor(&self) -> wgpu::SamplerDescriptor<'static> {
-        let address_mode_u = match self.wrap_s {
-            GL_CLAMP_TO_EDGE => wgpu::AddressMode::ClampToEdge,
-            GL_MIRRORED_REPEAT => wgpu::AddressMode::MirrorRepeat,
-            _ => wgpu::AddressMode::Repeat,
-        };
-        let address_mode_v = match self.wrap_t {
-            GL_CLAMP_TO_EDGE => wgpu::AddressMode::ClampToEdge,
-            GL_MIRRORED_REPEAT => wgpu::AddressMode::MirrorRepeat,
-            _ => wgpu::AddressMode::Repeat,
-        };
-
-        let mag_filter = match self.mag_filter {
-            GL_NEAREST => wgpu::FilterMode::Nearest,
-            _ => wgpu::FilterMode::Linear,
-        };
-
-        let min_filter = match self.min_filter {
-            GL_NEAREST | GL_NEAREST_MIPMAP_NEAREST | GL_NEAREST_MIPMAP_LINEAR => {
-                wgpu::FilterMode::Nearest
-            }
-            _ => wgpu::FilterMode::Linear,
-        };
-        let mipmap_filter = match self.min_filter {
-            GL_NEAREST_MIPMAP_LINEAR | GL_LINEAR_MIPMAP_LINEAR => wgpu::MipmapFilterMode::Linear,
-            _ => wgpu::MipmapFilterMode::Nearest,
-        };
-
-        wgpu::SamplerDescriptor {
-            label: Some("GL Texture Sampler"),
-            address_mode_u,
-            address_mode_v,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter,
-            min_filter,
-            mipmap_filter,
-            lod_min_clamp: self.min_lod.max(0.0),
-            lod_max_clamp: self.max_lod.max(0.0),
-            compare: None,
-            anisotropy_clamp: 1,
-            border_color: None,
-        }
-    }
-
-    pub fn sync_gpu(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        bind_group_layout: &wgpu::BindGroupLayout,
-    ) {
-        if !self.dirty && self.gpu_bind_group.is_some() {
-            return;
-        }
-
-        let width = self.width.max(1);
-        let height = self.height.max(1);
-        let mip_count = (self.level_data.keys().max().copied().unwrap_or(0) + 1).max(1);
-
-        let size = wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        };
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("GL Texture2D"),
-            size,
-            mip_level_count: mip_count,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        // Upload level data
-        for (&level, data) in &self.level_data {
-            let level_w = (width >> level).max(1);
-            let level_h = (height >> level).max(1);
-            let expected_bytes = (level_w * level_h * 4) as usize;
-
-            if data.len() >= expected_bytes {
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: level,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &data[0..expected_bytes],
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(level_w * 4),
-                        rows_per_image: Some(level_h),
-                    },
-                    wgpu::Extent3d {
-                        width: level_w,
-                        height: level_h,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
-        }
-
-        // If level 0 was not uploaded, fill with 1x1 white
-        if !self.level_data.contains_key(&0) {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &[255, 255, 255, 255],
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4),
-                    rows_per_image: Some(1),
-                },
-                wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&self.get_wgpu_sampler_descriptor());
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("GL Texture BindGroup"),
-            layout: bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        self.gpu_texture = Some(texture);
-        self.gpu_view = Some(view);
-        self.gpu_sampler = Some(sampler);
-        self.gpu_bind_group = Some(bind_group);
-        self.dirty = false;
     }
 }
 

@@ -2,7 +2,7 @@
 #![allow(unused_imports, dead_code, unused_mut)]
 use crate::display_list::{DisplayList, DisplayListOp, DisplayListRegistry, VertexData};
 use crate::matrix::{Mat4, MatrixMode, MatrixStack};
-use crate::renderer::{PipelineKey, WgpuRenderer};
+use crate::pipeline::PipelineKey;
 use crate::shader::FixedFunctionUniforms;
 use crate::sync::Mutex;
 use crate::texture::{TextureManager, TextureObject};
@@ -42,9 +42,35 @@ impl Default for LightState {
     }
 }
 
+// Global current-context registry.
+//
+// no_std note: `std::thread_local!` is unavailable, and the target usage
+// (a single implicit GL context shared across threads, as on the consoles
+// this was ported from) makes globally-current state the correct semantics
+// anyway. Both slots are plain lock-protected globals.
+pub static CURRENT_CONTEXT: Mutex<Option<Arc<Mutex<GlContext>>>> = Mutex::new(None);
+static LAST_ACTIVE_CONTEXT: Mutex<Option<Arc<Mutex<GlContext>>>> = Mutex::new(None);
+
+/// The context current on this logical "thread group": the explicitly
+/// current context, falling back to whichever context was last made current
+/// on any thread (see egl.rs notes on implicit-context semantics).
+pub fn get_current_gl_context() -> Option<Arc<Mutex<GlContext>>> {
+    if let Some(ctx) = CURRENT_CONTEXT.lock().clone() {
+        return Some(ctx);
+    }
+    LAST_ACTIVE_CONTEXT.lock().clone()
+}
+
+/// Set by `eglMakeCurrent` / `egl_release_context` in vantage-egl.
+pub fn set_current_gl_context(ctx: Option<Arc<Mutex<GlContext>>>) {
+    *CURRENT_CONTEXT.lock() = ctx.clone();
+    if ctx.is_some() {
+        *LAST_ACTIVE_CONTEXT.lock() = ctx;
+    }
+}
+
 pub struct GlContext {
     pub id: u32,
-    pub renderer: Option<Arc<Mutex<WgpuRenderer>>>,
     /// Owned by the context: every access already happens under the
     /// context lock (`with_context` / `&mut self` methods), so no inner
     /// mutex is needed.
@@ -184,13 +210,11 @@ unsafe impl Sync for GlContext {}
 impl GlContext {
     pub fn new(
         id: u32,
-        renderer: Option<Arc<Mutex<WgpuRenderer>>>,
         texture_manager: TextureManager,
         display_lists: Arc<DisplayListRegistry>,
     ) -> Self {
         Self {
             id,
-            renderer,
             texture_manager,
             display_lists,
             matrix_mode: MatrixMode::ModelView,
@@ -599,68 +623,11 @@ impl GlContext {
             }
         }
 
-        let Some(renderer) = &self.renderer else {
-            return;
-        };
-
-        let (final_vertices, final_indices): (&[VertexData], Option<alloc::borrow::Cow<[u32]>>) =
-            if mode == GL_QUADS {
-                // Expand quads to triangle indexed list
-                let quad_count = vertices.len() / 4;
-                let mut inds = Vec::with_capacity(quad_count * 6);
-                for q in 0..quad_count as u32 {
-                    let base = q * 4;
-                    inds.push(base + 0);
-                    inds.push(base + 1);
-                    inds.push(base + 2);
-                    inds.push(base + 0);
-                    inds.push(base + 2);
-                    inds.push(base + 3);
-                }
-                (vertices, Some(alloc::borrow::Cow::Owned(inds)))
-            } else if let Some(inds) = indices {
-                (vertices, Some(alloc::borrow::Cow::Borrowed(inds)))
-            } else {
-                (vertices, None)
-            };
-        let key = self.build_pipeline_key(mode);
-        let uniforms = self.build_uniforms();
-
-        let mut fallback_white = TextureObject::new(0, GL_TEXTURE_2D);
-        let tex = self
-            .texture_manager
-            .get_current_texture_mut()
-            .unwrap_or(&mut fallback_white);
-
-        let vp = (
-            self.viewport.0.max(0) as u32,
-            self.viewport.1.max(0) as u32,
-            self.viewport.2.max(1) as u32,
-            self.viewport.3.max(1) as u32,
-        );
-
-        let scissor = if self.scissor_test_enabled {
-            Some((
-                self.scissor.0.max(0) as u32,
-                self.scissor.1.max(0) as u32,
-                self.scissor.2.max(1) as u32,
-                self.scissor.3.max(1) as u32,
-            ))
-        } else {
-            None
-        };
-
-        let mut rend = renderer.lock();
-        rend.draw_mesh(
-            &key,
-            &uniforms,
-            tex,
-            final_vertices,
-            final_indices.as_deref(),
-            vp,
-            self.depth_range,
-            scissor,
-        );
+        // MISSING: presentation backend (Phase 4) — vertex data is validated
+        // and quad-expanded, then recorded into the hal command buffer.
+        let _ = (vertices, indices);
+        let _key = self.build_pipeline_key(mode);
+        let _uniforms = self.build_uniforms();
     }
 
     pub fn call_display_list(&mut self, list_id: GLuint) {

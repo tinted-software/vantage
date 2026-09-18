@@ -66,7 +66,7 @@ impl Mat4 {
 
     #[inline]
     pub fn rotate(&mut self, angle_deg: f32, mut x: f32, mut y: f32, mut z: f32) {
-        let len = (x * x + y * y + z * z).sqrt();
+        let len = libm::sqrtf(x * x + y * y + z * z);
         if len > 1e-6 {
             x /= len;
             y /= len;

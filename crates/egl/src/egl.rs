@@ -1,113 +1,26 @@
 //! EGL 1.4 API implementation and context/surface management.
 #![allow(unused_imports, dead_code)]
-use crate::display_list::DisplayListRegistry;
-use crate::error::AngleWgpuError;
-use crate::gl_context::GlContext;
+use vantage_gles::display_list::DisplayListRegistry;
+use vantage_gles::gl_context::{
+    set_current_gl_context, GlContext, CURRENT_CONTEXT,
+};
 use crate::glvnd::{current_native_platform, native_display_ptr, set_platform, NativePlatform};
-use crate::renderer::WgpuRenderer;
-use crate::sync::Mutex;
-use crate::texture::TextureManager;
-use crate::types::*;
+use vantage_gles::sync::Mutex;
+use vantage_gles::texture::TextureManager;
+use vantage_gles::types::*;
 use alloc::collections::BTreeMap as HashMap;
 use alloc::sync::Arc;
 use core::ffi::{c_void, CStr};
-use core::future::Future;
-use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, Ordering};
-use raw_window_handle::{
-    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
-    RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, Win32WindowHandle, WindowHandle,
-    WindowsDisplayHandle, XlibDisplayHandle, XlibWindowHandle,
-};
-#[derive(Clone, Copy, Debug)]
-struct ForeignNativeWindow {
-    kind: u32,
-    display: *mut c_void,
-    window: u64,
-    screen: i32,
-}
+// MISSING: X11 MIT-SHM presentation backend (Phase 5). Until it lands,
+// every surface-creation path returns EGL_BAD_ALLOC.
 
-unsafe impl Send for ForeignNativeWindow {}
-unsafe impl Sync for ForeignNativeWindow {}
-
-impl HasDisplayHandle for ForeignNativeWindow {
-    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        let raw = match self.kind {
-            ANGLE_WGPU_NATIVE_X11 => RawDisplayHandle::Xlib(XlibDisplayHandle::new(
-                NonNull::new(self.display),
-                self.screen,
-            )),
-            ANGLE_WGPU_NATIVE_WAYLAND => {
-                let display = NonNull::new(self.display).ok_or(HandleError::Unavailable)?;
-                RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display))
-            }
-            ANGLE_WGPU_NATIVE_WIN32 => RawDisplayHandle::Windows(WindowsDisplayHandle::new()),
-            _ => return Err(HandleError::NotSupported),
-        };
-        Ok(unsafe { DisplayHandle::borrow_raw(raw) })
-    }
-}
-
-impl HasWindowHandle for ForeignNativeWindow {
-    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
-        let raw = match self.kind {
-            ANGLE_WGPU_NATIVE_X11 => RawWindowHandle::Xlib(XlibWindowHandle::new(self.window)),
-            ANGLE_WGPU_NATIVE_WAYLAND => {
-                let surface =
-                    NonNull::new(self.window as *mut c_void).ok_or(HandleError::Unavailable)?;
-                RawWindowHandle::Wayland(WaylandWindowHandle::new(surface))
-            }
-            ANGLE_WGPU_NATIVE_WIN32 => {
-                let hwnd =
-                    NonNull::new(self.window as *mut c_void).ok_or(HandleError::Unavailable)?;
-                let hinstance = NonNull::new(self.display).ok_or(HandleError::Unavailable)?;
-                let hwnd_nz: core::num::NonZeroIsize =
-                    core::num::NonZeroIsize::new(hwnd.as_ptr() as isize)
-                        .ok_or(HandleError::Unavailable)?;
-                let hinst_nz: core::num::NonZeroIsize =
-                    core::num::NonZeroIsize::new(hinstance.as_ptr() as isize)
-                        .ok_or(HandleError::Unavailable)?;
-                let mut handle = Win32WindowHandle::new(hwnd_nz);
-                handle.hinstance = Some(hinst_nz);
-                RawWindowHandle::Win32(handle)
-            }
-            _ => return Err(HandleError::NotSupported),
-        };
-        Ok(unsafe { WindowHandle::borrow_raw(raw) })
-    }
-}
-
-pub fn block_on<F: Future>(mut future: F) -> F::Output {
-    use core::pin::Pin;
-    use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-    fn noop_clone(_: *const ()) -> RawWaker {
-        noop_raw_waker()
-    }
-    fn noop(_: *const ()) {}
-    fn noop_raw_waker() -> RawWaker {
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(noop_clone, noop, noop, noop);
-        RawWaker::new(core::ptr::null(), &VTABLE)
-    }
-
-    let waker = unsafe { Waker::from_raw(noop_raw_waker()) };
-    let mut cx = Context::from_waker(&waker);
-    let mut future = unsafe { Pin::new_unchecked(&mut future) };
-
-    loop {
-        match future.as_mut().poll(&mut cx) {
-            Poll::Ready(result) => return result,
-            // no_std: no scheduler to yield to; busy-wait until another
-            // thread completes the future.
-            Poll::Pending => core::hint::spin_loop(),
-        }
-    }
-}
 pub struct EglSurfaceState {
     pub id: u32,
     pub width: u32,
     pub height: u32,
     pub native_window: NativeWindowType,
-    pub renderer: Option<Arc<Mutex<WgpuRenderer>>>,
+    pub swap_interval: EGLint,
 }
 
 pub struct EglContextState {
@@ -157,31 +70,12 @@ unsafe impl Sync for EglDisplayState {}
 static GLOBAL_DISPLAY: Mutex<Option<Arc<Mutex<EglDisplayState>>>> = Mutex::new(None);
 static LAST_EGL_ERROR: Mutex<EGLint> = Mutex::new(EGL_SUCCESS);
 
-// The game spawns chunk-rebuild worker threads that issue GL calls (via
-// display-list compilation) without ever calling `eglMakeCurrent` on that
-// thread themselves - real consoles this was ported from share one implicit
-// GL context across threads. Desktop EGL is strictly per-thread-current, so
-// without this fallback every GL call from those threads silently no-ops
-// (see `with_context`), and displays lists built there are never actually
-// created: `glCallList` on the render thread then calls empty/nonexistent
-// lists, so terrain compiles but never draws. This app only ever creates a
-// single GL context, so falling back to "whichever context was last made
-// current on any thread" is safe and matches the game's actual usage.
-static LAST_ACTIVE_CONTEXT: Mutex<Option<Arc<Mutex<GlContext>>>> = Mutex::new(None);
+// Current-context registry lives in vantage-gles (`gl_context`): the GL
+// entry points there resolve "the" context through `get_current_gl_context`,
+// with an implicit fall-back to the last context made current on any thread
+// (see that module's notes on console-style shared-context semantics).
 
-// no_std note: `std::thread_local!` is unavailable, and the target usage
-// (a single implicit GL context shared across threads, as on the consoles
-// this was ported from) makes globally-current state the correct semantics
-// anyway. Both slots are plain lock-protected globals.
-pub static CURRENT_CONTEXT: Mutex<Option<Arc<Mutex<GlContext>>>> = Mutex::new(None);
 pub static CURRENT_SURFACE: Mutex<Option<Arc<Mutex<EglSurfaceState>>>> = Mutex::new(None);
-
-pub fn get_current_gl_context() -> Option<Arc<Mutex<GlContext>>> {
-    if let Some(ctx) = CURRENT_CONTEXT.lock().clone() {
-        return Some(ctx);
-    }
-    LAST_ACTIVE_CONTEXT.lock().clone()
-}
 
 pub fn set_egl_error(err: EGLint) {
     *LAST_EGL_ERROR.lock() = err;
@@ -202,7 +96,7 @@ pub fn get_or_create_display() -> Arc<Mutex<EglDisplayState>> {
 pub unsafe fn egl_get_display(display_id: NativeDisplayType) -> EGLDisplay {
     // Direct-link clients (no glvnd) pass the native display handle here:
     // an X11 `Display*`/Wayland `wl_display*`, or EGL_DEFAULT_DISPLAY (null).
-    // Record it so window-surface creation can build a real wgpu surface.
+    // Record it so window-surface creation can present to the right window.
     let native = display_id as *mut c_void;
     if !native.is_null() || current_native_platform() == NativePlatform::None {
         // Platform 0 lets set_platform pick from the environment.
@@ -373,6 +267,12 @@ pub unsafe fn egl_query_string(dpy: EGLDisplay, name: EGLint) -> *const core::ff
     bytes.as_ptr() as *const core::ffi::c_char
 }
 
+/// MISSING: std-gated only — freestanding builds report no visual.
+#[cfg(not(feature = "std"))]
+fn x11_default_visual_id() -> EGLint {
+    0
+}
+
 pub unsafe fn egl_get_config_attrib(
     _dpy: EGLDisplay,
     _config: EGLConfig,
@@ -402,6 +302,7 @@ pub unsafe fn egl_get_config_attrib(
 /// Best-effort XVisualID of the default visual for the current native X11
 /// display, resolved through libX11 at runtime (no hard dependency).
 /// Returns 0 when unavailable or not running on X11.
+#[cfg(feature = "std")]
 fn x11_default_visual_id() -> EGLint {
     if current_native_platform() != NativePlatform::X11 {
         return 0;
@@ -473,48 +374,19 @@ pub unsafe fn egl_create_window_surface(
         d.next_surface_id.fetch_add(1, Ordering::SeqCst)
     };
 
-    // A real on-screen window: when the display came through glvnd we know
-    // the window system (and its Display*/wl_surface*) from
-    // `getPlatformDisplay`, so build a wgpu surface that actually presents.
-    // Without that context (e.g. the pbuffer path passes win == null), fall
-    // back to a headless offscreen renderer.
-    let renderer = if (win as usize) != 0 && native_display_ptr() != core::ptr::null_mut() {
-        let kind = match current_native_platform() {
-            NativePlatform::X11 => ANGLE_WGPU_NATIVE_X11,
-            NativePlatform::Wayland => ANGLE_WGPU_NATIVE_WAYLAND,
-            NativePlatform::None => 0,
-        };
-        let foreign = ForeignNativeWindow {
-            kind,
-            display: native_display_ptr(),
-            window: win as u64,
-            screen: 0,
-        };
-        match renderer_from_native_window(foreign, width.max(1), height.max(1)) {
-            Ok(r) => r,
-            Err(_e) => {
-                set_egl_error(EGL_BAD_ALLOC);
-                return EGL_NO_SURFACE;
-            }
-        }
-    } else {
-        // renderer nothing would ever present. The error is retrievable via
-        // `eglGetError` (EGL_BAD_ALLOC).
-        match block_on(WgpuRenderer::new_headless(width, height)) {
-            Ok(r) => Arc::new(Mutex::new(r)),
-            Err(_e) => {
-                set_egl_error(EGL_BAD_ALLOC);
-                return EGL_NO_SURFACE;
-            }
-        }
-    };
+    // MISSING: presentation (Phase 3) — X11 MIT-SHM surface backing. Every
+    // surface-creation path fails with EGL_BAD_ALLOC until the hal image +
+    // X11 backend are wired.
+    set_egl_error(EGL_BAD_ALLOC);
+    return EGL_NO_SURFACE;
 
+    #[allow(unreachable_code)]
     let surface_state = Arc::new(Mutex::new(EglSurfaceState {
         id,
         width,
         height,
         native_window: win,
-        renderer: Some(renderer),
+        swap_interval: 0,
     }));
 
     {
@@ -527,53 +399,6 @@ pub unsafe fn egl_create_window_surface(
     }
 
     Arc::into_raw(surface_state) as EGLSurface
-}
-
-fn renderer_from_native_window(
-    native: ForeignNativeWindow,
-    width: u32,
-    height: u32,
-) -> Result<Arc<Mutex<WgpuRenderer>>, AngleWgpuError> {
-    use alloc::boxed::Box;
-
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
-        Box::new(native),
-    ));
-
-    let surface = instance
-        .create_surface(native)
-        .map_err(AngleWgpuError::CreateSurface)?;
-
-    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: Some(&surface),
-        force_fallback_adapter: false,
-        apply_limit_buckets: false,
-    }))
-    .map_err(AngleWgpuError::RequestAdapter)?;
-
-    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("angle_wgpu Native Window Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
-        memory_hints: wgpu::MemoryHints::default(),
-        trace: wgpu::Trace::Off,
-        experimental_features: wgpu::ExperimentalFeatures::default(),
-        default_queue: wgpu::QueueDescriptor::default(),
-    }))
-    .map_err(AngleWgpuError::RequestDevice)?;
-
-    let renderer = WgpuRenderer::new_with_surface(
-        instance,
-        adapter,
-        device,
-        queue,
-        surface,
-        width.max(1),
-        height.max(1),
-    )?;
-
-    Ok(Arc::new(Mutex::new(renderer)))
 }
 
 pub unsafe fn egl_create_native_window_surface(
@@ -593,30 +418,12 @@ pub unsafe fn egl_create_native_window_surface(
         return EGL_NO_SURFACE;
     }
 
-    // SDL demo originally left width/height at 0, which made the renderer
-    // configure a 1x1 swapchain: the 800x600 X11 window then composites as
-    // mostly transparent until a resize reconfigures it to the real size.
-    // Fall back to the window's actual size-derived default when the caller
-    // did not provide one, so the first frame already matches the window.
-    let width = if n.width == 0 { 800 } else { n.width }.max(1);
-    let height = if n.height == 0 { 600 } else { n.height }.max(1);
-    let foreign = ForeignNativeWindow {
-        kind: n.kind,
-        display: n.display,
-        window: n.window,
-        screen: n.screen,
-    };
-    let renderer = match renderer_from_native_window(foreign, width, height) {
-        Ok(r) => r,
-        // Surface creation failures are surfaced to the caller via the EGL
-        // error state (retrievable with `eglGetError`); the underlying
-        // `AngleWgpuError` carries the wgpu-level details.
-        Err(_e) => {
-            set_egl_error(EGL_BAD_NATIVE_WINDOW);
-            return EGL_NO_SURFACE;
-        }
-    };
+    // MISSING: presentation (Phase 3) — X11 MIT-SHM surface backing.
+    let _ = n;
+    set_egl_error(EGL_BAD_ALLOC);
+    return EGL_NO_SURFACE;
 
+    #[allow(unreachable_code)]
     let dpy_arc = if !dpy.is_null() {
         Arc::from_raw(dpy as *const Mutex<EglDisplayState>)
     } else {
@@ -628,12 +435,13 @@ pub unsafe fn egl_create_native_window_surface(
         d.next_surface_id.fetch_add(1, Ordering::SeqCst)
     };
 
+    #[allow(unreachable_code)]
     let surface_state = Arc::new(Mutex::new(EglSurfaceState {
         id,
-        width,
-        height,
-        native_window: n.window as NativeWindowType,
-        renderer: Some(renderer),
+        width: 1,
+        height: 1,
+        native_window: 0 as NativeWindowType,
+        swap_interval: 0,
     }));
 
     {
@@ -694,7 +502,6 @@ pub unsafe fn egl_create_context(
 
     let gl_ctx = Arc::new(Mutex::new(GlContext::new(
         id,
-        None,
         TextureManager::new(),
         shared_lists,
     )));
@@ -738,7 +545,7 @@ pub unsafe fn egl_make_current(
     ctx: EGLContext,
 ) -> EGLBoolean {
     if ctx.is_null() {
-        *CURRENT_CONTEXT.lock() = None;
+        set_current_gl_context(None);
         *CURRENT_SURFACE.lock() = None;
         return EGL_TRUE;
     }
@@ -749,15 +556,14 @@ pub unsafe fn egl_make_current(
 
     if !draw.is_null() {
         let surf_arc = Arc::from_raw(draw as *const Mutex<EglSurfaceState>);
-        let (w, h, renderer) = {
+        let (w, h) = {
             let s = surf_arc.lock();
-            (s.width, s.height, s.renderer.clone())
+            (s.width, s.height)
         };
         core::mem::forget(surf_arc.clone());
 
         {
             let mut gl = gl_ctx.lock();
-            gl.renderer = renderer;
             gl.viewport = (0, 0, w as i32, h as i32);
             gl.scissor = (0, 0, w as i32, h as i32);
         }
@@ -765,8 +571,7 @@ pub unsafe fn egl_make_current(
         *CURRENT_SURFACE.lock() = Some(surf_arc);
     }
 
-    *LAST_ACTIVE_CONTEXT.lock() = Some(gl_ctx.clone());
-    *CURRENT_CONTEXT.lock() = Some(gl_ctx);
+    set_current_gl_context(Some(gl_ctx));
     EGL_TRUE
 }
 
@@ -819,17 +624,9 @@ pub unsafe fn egl_swap_buffers(_dpy: EGLDisplay, surface: EGLSurface) -> EGLBool
         return EGL_FALSE;
     }
 
-    let surf_arc = Arc::from_raw(surface as *const Mutex<EglSurfaceState>);
-    let renderer = surf_arc.lock().renderer.clone();
-    core::mem::forget(surf_arc);
-
-    if let Some(r) = renderer {
-        let mut rend = r.lock();
-        if rend.swap_buffers().is_err() {
-            set_egl_error(EGL_BAD_ACCESS);
-            return EGL_FALSE;
-        }
-    }
+    // MISSING: presentation (Phase 3) — flush the current context's hal
+    // command buffer and blit to the X11 SHM image. Phase 0: no-op.
+    core::mem::forget(Arc::from_raw(surface as *const Mutex<EglSurfaceState>));
     EGL_TRUE
 }
 
@@ -841,12 +638,10 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
     let h = height.max(1);
     let surf_arc = Arc::from_raw(surface as *const Mutex<EglSurfaceState>);
     {
+        // MISSING: presentation (Phase 3) — resize the hal image + XImage.
         let mut s = surf_arc.lock();
         s.width = w;
         s.height = h;
-        if let Some(r) = &s.renderer {
-            r.lock().resize(w, h);
-        }
     }
 
     let is_current = CURRENT_SURFACE
@@ -876,11 +671,9 @@ pub unsafe fn egl_swap_interval(_dpy: EGLDisplay, interval: EGLint) -> EGLBoolea
         set_egl_error(EGL_BAD_SURFACE);
         return EGL_FALSE;
     };
-    let Some(renderer) = surface.lock().renderer.clone() else {
-        set_egl_error(EGL_BAD_SURFACE);
-        return EGL_FALSE;
-    };
-    renderer.lock().set_swap_interval(interval);
+    // MISSING: presentation (Phase 3) — honor the interval with XSync at
+    // present time.
+    surface.lock().swap_interval = interval;
     EGL_TRUE
 }
 
