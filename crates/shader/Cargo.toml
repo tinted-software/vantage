@@ -3,6 +3,17 @@ name = "vantage-shader"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+
 [features]
 default = ["std"]
-std = []
+std = ["pliron/std", "pliron-llvm/std"]
+
+[dependencies]
+hashbrown.workspace = true
+libm.workspace = true
+vantage-raster = { path = "../raster", default-features = false }
+pliron = { version = "0.18.0", default-features = false }
+pliron-llvm = { version = "0.18.0", default-features = false, optional = true }
+
+[dev-dependencies]
+bytemuck.workspace = true
