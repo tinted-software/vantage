@@ -1,0 +1,40 @@
+[package]
+name = "vantage-vulkan"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Vulkan ICD implementation for Vantage software rendering."
+
+[lib]
+name = "vantage_vk"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = ["std"]
+std = ["vantage-hal/std", "vantage-shader/std"]
+capi = []
+
+[dependencies]
+smallvec = { version = "1.16.1", default-features = false }
+vantage-hal = { path = "../hal", default-features = false }
+vantage-shader = { path = "../shader", default-features = false }
+vantage-raster = { path = "../raster", default-features = false }
+hashbrown.workspace = true
+bytemuck.workspace = true
+spirv.workspace = true
+rspirv.workspace = true
+
+[package.metadata.capi.library]
+name = "vantage_vk"
+
+[package.metadata.capi.pkg_config]
+filename = "vulkan"
+name = "vulkan"
+library = "vantage_vk"
+
+[package.metadata.capi.install.data]
+asset = [
+    { from = "vulkan/icd.d/vantage_icd.json", to = "vulkan/icd.d" },
+]
+
+[dev-dependencies]

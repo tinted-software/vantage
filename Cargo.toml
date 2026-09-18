@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/hal", "crates/raster", "crates/shader", "crates/gles", "crates/egl"]
+members = ["crates/hal", "crates/raster", "crates/shader", "crates/gles", "crates/egl", "crates/vulkan"]
 resolver = "3"
 
 [workspace.dependencies]
@@ -8,6 +8,8 @@ glam = { version = "0.33.7", default-features = false, features = ["nostd-libm",
 hashbrown = { version = "0.17.1", default-features = false, features = ["alloc", "default-hasher"] }
 lock_api = "0.4.14"
 libm = { version = "0.2.16", default-features = false }
+rspirv = { git = "https://github.com/gfx-rs/rspirv", default-features = false }
+spirv = { git = "https://github.com/gfx-rs/rspirv", default-features = false }
 
 [profile.dev]
 opt-level = 2

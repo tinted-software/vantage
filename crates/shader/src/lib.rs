@@ -13,6 +13,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 pub use vantage_raster::{gl, FragFn, FragState, SampledTexture, Varyings};
+pub mod spirv;
 
 /// Canonical fragment state key for pipeline caching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
