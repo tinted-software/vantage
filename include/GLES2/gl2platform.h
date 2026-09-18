@@ -1,4 +1,4 @@
-#ifndef ANGLE_WGPU_COMPAT_GLES2_GL2PLATFORM_H
-#define ANGLE_WGPU_COMPAT_GLES2_GL2PLATFORM_H
-#include "angle_wgpu/angle_wgpu.h"
+#ifndef VANTAGE_COMPAT_GLES2_GL2PLATFORM_H
+#define VANTAGE_COMPAT_GLES2_GL2PLATFORM_H
+#include "vantage/vantage.h"
 #endif

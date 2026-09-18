@@ -1,4 +1,4 @@
-#ifndef ANGLE_WGPU_COMPAT_EGL_EGL_H
-#define ANGLE_WGPU_COMPAT_EGL_EGL_H
-#include "angle_wgpu/angle_wgpu.h"
+#ifndef VANTAGE_COMPAT_EGL_EGL_H
+#define VANTAGE_COMPAT_EGL_EGL_H
+#include "vantage/vantage.h"
 #endif

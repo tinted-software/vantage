@@ -28,10 +28,11 @@ name = "vantage"
 filename = "glesv1_cm"
 name = "glesv1_cm"
 library = "vantage"
+strip_include_path_components = 1
 
 [package.metadata.capi.install.include]
 asset = [
-    { from = "include/**/*", to = "." }
+    { from = "../../include/**/*", to = "." },
 ]
 
 [package.metadata.capi.install.data]
