@@ -154,13 +154,19 @@ dependencies = [
 name = "vantage-hal"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "hashbrown",
  "smallvec",
+ "vantage-raster",
 ]
 
 [[package]]
 name = "vantage-raster"
 version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "libm",
+]
 
 [[package]]
 name = "vantage-shader"

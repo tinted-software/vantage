@@ -7,5 +7,8 @@ license = "MIT OR Apache-2.0"
 default = ["std"]
 std = []
 [dependencies]
+bytemuck.workspace = true
+vantage-raster = { path = "../raster", default-features = false }
+
 hashbrown.workspace = true
 smallvec = { version = "1.16.1", default-features = false }

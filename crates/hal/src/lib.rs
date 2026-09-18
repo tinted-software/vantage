@@ -13,6 +13,8 @@
 #![no_std]
 extern crate alloc;
 
+pub use vantage_raster::{FragFn, FragState, RasterState, SampledTexture, Targets, Varyings, Vertex};
+
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
@@ -180,6 +182,11 @@ pub enum Cmd {
         y: i32,
         w: u32,
         h: u32,
+    },
+    BindAttachments {
+        color: Option<ImageId>,
+        depth: Option<ImageId>,
+        stencil: Option<ImageId>,
     },
     ClearAttachments {
         color: [f32; 4],
@@ -418,13 +425,17 @@ impl Queue {
                 PushConstants { data } => push = *data,
                 SetViewport { x, y, w, h } => viewport = (*x, *y, *w, *h),
                 SetScissor { x, y, w, h } => scissor = Some((*x, *y, *w, *h)),
+                BindAttachments { color, depth, stencil } => {
+                    color_target = *color;
+                    depth_target = *depth;
+                    stencil_target = *stencil;
+                }
                 ClearAttachments {
                     color,
                     depth,
                     stencil,
                     mask,
                 } => {
-                    // mask bits mirror GL_CLEAR bits: 1=color, 2=depth, 4=stencil
                     if mask & 1 != 0 {
                         if let Some(im) = color_target.and_then(|id| dev.image_mut(id)) {
                             clear_color_image(im, *color);
@@ -441,21 +452,34 @@ impl Queue {
                         }
                     }
                 }
-                Draw { .. } | DrawIndexed { .. } => {
-                    // MISSING: raster execution (Phase 2) — draw commands are
-                    // consumed by vantage-raster's tile rasterizer via the
-                    // FragFn seam.
-                    let _ = (
-                        &bound_pipeline,
-                        &bound_descriptors,
+                Draw { count, first } => {
+                    execute_draw(
+                        dev,
+                        bound_pipeline,
                         &vertex_buffers,
-                        &index_buffer,
-                        &viewport,
-                        &scissor,
-                        &push,
-                        &color_target,
-                        &depth_target,
-                        &stencil_target,
+                        None,
+                        *first,
+                        *count,
+                        viewport,
+                        scissor,
+                        color_target,
+                        depth_target,
+                        stencil_target,
+                    );
+                }
+                DrawIndexed { count, first } => {
+                    execute_draw(
+                        dev,
+                        bound_pipeline,
+                        &vertex_buffers,
+                        index_buffer,
+                        *first,
+                        *count,
+                        viewport,
+                        scissor,
+                        color_target,
+                        depth_target,
+                        stencil_target,
                     );
                 }
             }
@@ -488,6 +512,94 @@ fn clear_depth_image(im: &mut Image, depth: f32) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn draw_indexed_triangle_into_image_and_readback() {
+        let mut dev = Device::new();
+
+        let color_img = dev.create_image(Format::R8G8B8A8Unorm, 64, 64);
+        let depth_img = dev.create_image(Format::D32Sfloat, 64, 64);
+        let readback_buf = dev.create_buffer(64 * 64 * 4);
+
+        // 3 vertices covering the center
+        let v0 = Vertex {
+            pos: [-1.0, -1.0, 0.5, 1.0],
+            color: [0.0, 1.0, 0.0, 1.0], // Green
+            tex0: [0.0, 0.0],
+            tex1: [0.0, 0.0],
+            fog: 0.0,
+            _pad: 0.0,
+        };
+        let v1 = Vertex {
+            pos: [1.0, -1.0, 0.5, 1.0],
+            color: [0.0, 1.0, 0.0, 1.0],
+            tex0: [1.0, 0.0],
+            tex1: [0.0, 0.0],
+            fog: 0.0,
+            _pad: 0.0,
+        };
+        let v2 = Vertex {
+            pos: [0.0, 1.0, 0.5, 1.0],
+            color: [0.0, 1.0, 0.0, 1.0],
+            tex0: [0.5, 1.0],
+            tex1: [0.0, 0.0],
+            fog: 0.0,
+            _pad: 0.0,
+        };
+
+        let v_array = [v0, v1, v2];
+        let v_bytes: &[u8] = bytemuck::cast_slice(&v_array);
+        let v_buf = dev.create_buffer(v_bytes.len() as u64);
+        dev.buffer_mut(v_buf).unwrap().data.copy_from_slice(v_bytes);
+
+        let indices: [u16; 3] = [0, 1, 2];
+        let i_bytes: &[u8] = bytemuck::cast_slice(&indices);
+        let i_buf = dev.create_buffer(i_bytes.len() as u64);
+        dev.buffer_mut(i_buf).unwrap().data.copy_from_slice(i_bytes);
+
+        let pipe = dev.create_pipeline(Pipeline {
+            topology: 0,
+            cull_mode: 0,
+            front_face_ccw: true,
+            blend_enabled: false,
+            src_factor: 1,
+            dst_factor: 0,
+            depth_test: true,
+            depth_write: true,
+            depth_func: vantage_raster::gl::LEQUAL,
+            color_mask: 0x0F,
+        });
+
+        let mut cmd = CommandBuffer::default();
+        cmd.push(Cmd::BindAttachments {
+            color: Some(color_img),
+            depth: Some(depth_img),
+            stencil: None,
+        });
+        cmd.push(Cmd::ClearAttachments {
+            color: [0.0, 0.0, 0.0, 1.0],
+            depth: 1.0,
+            stencil: 0,
+            mask: 1 | 2,
+        });
+        cmd.push(Cmd::BindPipeline { pipeline: pipe });
+        cmd.push(Cmd::SetViewport { x: 0, y: 0, w: 64, h: 64 });
+        let mut v_vec = smallvec::SmallVec::new();
+        v_vec.push((v_buf, 0));
+        cmd.push(Cmd::BindVertexBuffers { first: 0, buffers: v_vec });
+        cmd.push(Cmd::BindIndexBuffer { buffer: i_buf, offset: 0, index_ty: IndexType::U16 });
+        cmd.push(Cmd::DrawIndexed { count: 3, first: 0 });
+        cmd.push(Cmd::CopyImageToBuffer { src: color_img, dst: readback_buf });
+
+        dev.submit(&cmd);
+
+        let rb = dev.buffer(readback_buf).unwrap();
+        let center = ((32 * 64 + 32) * 4) as usize;
+        // Green component at center must be 255
+        assert_eq!(rb.data[center + 1], 255, "Center pixel green expected");
+        assert_eq!(rb.data[center + 3], 255, "Center pixel alpha expected");
+    }
+
     use super::*;
 
     /// HAL contract: fill a staging buffer, copy it into a 64x64 RGBA image,
@@ -552,5 +664,160 @@ mod tests {
         dev.submit(&cmd);
         let im = dev.image(color).unwrap();
         assert!(im.data.iter().all(|&b| b == 0));
+    }
+}
+
+fn execute_draw(
+    dev: &mut Device,
+    pipeline_id: Option<PipelineId>,
+    vertex_buffers: &[(BufferId, u64)],
+    index_info: Option<(BufferId, u64, IndexType)>,
+    first: u32,
+    count: u32,
+    viewport: (i32, i32, u32, u32),
+    scissor: Option<(i32, i32, u32, u32)>,
+    color_id: Option<ImageId>,
+    depth_id: Option<ImageId>,
+    stencil_id: Option<ImageId>,
+) {
+    let Some(pipe_id) = pipeline_id else { return; };
+    let Some(pipe) = dev.pipelines.get(&pipe_id).cloned() else { return; };
+    let Some(c_id) = color_id else { return; };
+
+    // Get vertex buffer data
+    let Some((v_buf_id, v_offset)) = vertex_buffers.get(0).cloned() else { return; };
+    let Some(v_buf) = dev.buffer(v_buf_id) else { return; };
+
+    let v_slice = &v_buf.data[(v_offset as usize)..];
+    let v_size = core::mem::size_of::<Vertex>();
+    let num_verts = v_slice.len() / v_size;
+    let vertices: &[Vertex] = unsafe {
+        core::slice::from_raw_parts(v_slice.as_ptr() as *const Vertex, num_verts)
+    };
+
+    // Construct raster state
+    let raster_state = RasterState {
+        viewport,
+        depth_range: (0.0, 1.0),
+        scissor,
+        cull_mode: pipe.cull_mode,
+        front_face_ccw: pipe.front_face_ccw,
+        shade_flat: false,
+        depth_test: pipe.depth_test,
+        depth_write: pipe.depth_write,
+        depth_func: pipe.depth_func,
+        stencil_test: false,
+        stencil_func: vantage_raster::gl::ALWAYS,
+        stencil_ref: 0,
+        stencil_func_mask: !0,
+        stencil_write_mask: !0,
+        stencil_fail: vantage_raster::gl::STENCIL_KEEP,
+        stencil_zfail: vantage_raster::gl::STENCIL_KEEP,
+        stencil_zpass: vantage_raster::gl::STENCIL_KEEP,
+        blend_enabled: pipe.blend_enabled,
+        src_rgb: pipe.src_factor,
+        dst_rgb: pipe.dst_factor,
+        src_alpha: pipe.src_factor,
+        dst_alpha: pipe.dst_factor,
+        blend_color: [0.0; 4],
+        color_mask: pipe.color_mask,
+        polygon_offset_fill: false,
+        polygon_offset_factor: 0.0,
+        polygon_offset_units: 0.0,
+        point_size: 1.0,
+        line_width: 1.0,
+    };
+
+    // Temporarily take targets from dev to satisfy borrow checker
+    let mut color_img = dev.images.remove(&c_id);
+    let mut depth_img = depth_id.and_then(|id| dev.images.remove(&id));
+    let mut stencil_img = stencil_id.and_then(|id| dev.images.remove(&id));
+
+    if let Some(ref mut c_im) = color_img {
+        let is_bgra = c_im.format == Format::B8G8R8A8Unorm;
+        let c_stride = c_im.width * 4;
+        let w = c_im.width;
+        let h = c_im.height;
+
+        let d_slice = depth_img.as_mut().map(|im| im.data.as_mut_slice());
+        let s_slice = stencil_img.as_mut().map(|im| im.data.as_mut_slice());
+
+        let targets = Targets {
+            color: c_im.data.as_mut_slice(),
+            color_stride: c_stride,
+            width: w,
+            height: h,
+            bgra_order: is_bgra,
+            depth: d_slice,
+            stencil: s_slice,
+        };
+
+        let default_frag_state = FragState {
+            textures: [SampledTexture::disabled(), SampledTexture::disabled()],
+            texenv_mode: [vantage_raster::gl::TEXENV_MODULATE; 2],
+            texenv_color: [[0.0; 4]; 2],
+            alpha_func: vantage_raster::gl::ALWAYS,
+            alpha_ref: 0.0,
+            fog_mode: 0,
+            fog_start: 0.0,
+            fog_end: 1.0,
+            fog_density: 0.0,
+            fog_color: [0.0; 4],
+        };
+
+        let mut raster = vantage_raster::PrimitiveRasterizer::new(
+            &raster_state,
+            targets,
+            vantage_raster::reference_frag,
+            &default_frag_state as *const FragState,
+        );
+
+        if let Some((i_buf_id, i_offset, i_type)) = index_info {
+            if let Some(i_buf) = dev.buffer(i_buf_id) {
+                let i_slice = &i_buf.data[(i_offset as usize)..];
+                let indices: alloc::vec::Vec<u32> = match i_type {
+                    IndexType::U16 => {
+                        let num = i_slice.len() / 2;
+                        let s: &[u16] = unsafe { core::slice::from_raw_parts(i_slice.as_ptr() as *const u16, num) };
+                        s.iter().map(|&idx| idx as u32).collect()
+                    }
+                    IndexType::U32 => {
+                        let num = i_slice.len() / 4;
+                        let s: &[u32] = unsafe { core::slice::from_raw_parts(i_slice.as_ptr() as *const u32, num) };
+                        s.to_vec()
+                    }
+                };
+
+                let end = (first + count) as usize;
+                let mut i = first as usize;
+                while i + 2 < end.min(indices.len()) {
+                    let idx0 = indices[i] as usize;
+                    let idx1 = indices[i + 1] as usize;
+                    let idx2 = indices[i + 2] as usize;
+                    if idx0 < vertices.len() && idx1 < vertices.len() && idx2 < vertices.len() {
+                        raster.draw_triangle(&vertices[idx0], &vertices[idx1], &vertices[idx2]);
+                    }
+                    i += 3;
+                }
+            }
+        } else {
+            let end = (first + count) as usize;
+            let mut i = first as usize;
+            while i + 2 < end.min(vertices.len()) {
+                raster.draw_triangle(&vertices[i], &vertices[i + 1], &vertices[i + 2]);
+                i += 3;
+            }
+        }
+    }
+
+    // Reinsert targets back into dev
+    if let Some(c_im) = color_img {
+        dev.images.insert(c_id, c_im);
+    }
+    if let (Some(d_id), Some(d_im)) = (depth_id, depth_img) {
+        dev.images.insert(d_id, d_im);
+    }
+    if let (Some(s_id), Some(s_im)) = (stencil_id, stencil_img) {
+        dev.images.insert(s_id, s_im);
     }
 }
