@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_parse_real_shader() {
-        let bytes = include_bytes!("../../../../prism/lib/prism/testdata_flip_frag.spv");
+        let bytes = include_bytes!("../testdata/testdata_flip_frag.spv");
         let m = SpirvModule::from_bytes(bytes).expect("valid real fragment shader");
         assert_eq!(m.entry_points.len(), 1);
         assert_eq!(m.entry_points[0].name, "main");
