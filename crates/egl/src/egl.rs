@@ -680,6 +680,15 @@ pub unsafe fn egl_swap_buffers(_dpy: EGLDisplay, surface: EGLSurface) -> EGLBool
         let cmd = core::mem::take(&mut ctx.command_buffer);
         ctx.hal_device.submit(&cmd);
 
+        // Re-bind attachments for subsequent frame's draw calls
+        let c_img = ctx.color_image;
+        let d_img = ctx.depth_image;
+        ctx.command_buffer.push(vantage_hal::Cmd::BindAttachments {
+            color: c_img,
+            depth: d_img,
+            stencil: None,
+        });
+
         #[cfg(all(feature = "std", target_os = "linux"))]
         {
             let mut surf = surf_arc.lock();
@@ -707,10 +716,22 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
     let h = height.max(1);
     let surf_arc = Arc::from_raw(surface as *const Mutex<EglSurfaceState>);
     {
-        // MISSING: presentation (Phase 3) — resize the hal image + XImage.
         let mut s = surf_arc.lock();
-        s.width = w;
-        s.height = h;
+        if s.width != w || s.height != h {
+            s.width = w;
+            s.height = h;
+            s.hal_color_image = None;
+            s.hal_depth_image = None;
+
+            #[cfg(all(feature = "std", target_os = "linux"))]
+            if let Some(ref mut x11) = s.x11_surface {
+                let dpy = x11.dpy;
+                let win = x11.win;
+                if let Ok(new_x11) = X11ShmSurface::new(dpy, win, w, h) {
+                    *x11 = new_x11;
+                }
+            }
+        }
     }
 
     let is_current = CURRENT_SURFACE
@@ -723,6 +744,24 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
             let mut gl = ctx.lock();
             gl.viewport = (0, 0, w as i32, h as i32);
             gl.scissor = (0, 0, w as i32, h as i32);
+
+            let mut surf = surf_arc.lock();
+            if surf.hal_color_image.is_none() {
+                let c_img = gl.hal_device.create_image(vantage_hal::Format::R8G8B8A8Unorm, w, h);
+                let d_img = gl.hal_device.create_image(vantage_hal::Format::D32Sfloat, w, h);
+                surf.hal_color_image = Some(c_img);
+                surf.hal_depth_image = Some(d_img);
+            }
+            let c_img = surf.hal_color_image;
+            let d_img = surf.hal_depth_image;
+            gl.color_image = c_img;
+            gl.depth_image = d_img;
+
+            gl.command_buffer.push(vantage_hal::Cmd::BindAttachments {
+                color: c_img,
+                depth: d_img,
+                stencil: None,
+            });
         }
     }
 

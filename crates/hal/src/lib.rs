@@ -266,6 +266,9 @@ pub struct Device {
     images: HashMap<ImageId, Image>,
     pipelines: HashMap<PipelineId, Pipeline>,
     descriptor_sets: HashMap<DescriptorSetId, DescriptorSet>,
+    pub color_attachment: Option<ImageId>,
+    pub depth_attachment: Option<ImageId>,
+    pub stencil_attachment: Option<ImageId>,
     next_id: u32,
     pub queue: Queue,
 }
@@ -283,6 +286,9 @@ impl Device {
             images: HashMap::new(),
             pipelines: HashMap::new(),
             descriptor_sets: HashMap::new(),
+            color_attachment: None,
+            depth_attachment: None,
+            stencil_attachment: None,
             next_id: 1,
             queue: Queue,
         }
@@ -371,9 +377,9 @@ impl Queue {
         let mut scissor: Option<(i32, i32, u32, u32)> = None;
         let mut push: [u8; 256] = [0; 256];
         // Target attachments for the current pass (set by ClearAttachments).
-        let mut color_target: Option<ImageId> = None;
-        let mut depth_target: Option<ImageId> = None;
-        let mut stencil_target: Option<ImageId> = None;
+        let mut color_target = dev.color_attachment;
+        let mut depth_target = dev.depth_attachment;
+        let mut stencil_target = dev.stencil_attachment;
         let mut current_frag_state = vantage_raster::FragState::default();
 
         for op in &cmd.ops {
