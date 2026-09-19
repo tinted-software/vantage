@@ -222,18 +222,12 @@ pub mod x11_shm {
             let h = (self.height as usize).min((*self.ximage).height as usize);
             let w = (self.width as usize).min((*self.ximage).width as usize);
 
-            // Copy with RGBA -> BGRA swizzle for standard X11 24/32-bit TrueColor visuals
+            // Framebuffer is already in native X11 TrueColor BGRA format
+            let row_bytes = w * 4;
             for y in 0..h {
-                let src_row = &src_rgba[(y * src_stride)..(y * src_stride + w * 4)];
-                let dst_row = core::slice::from_raw_parts_mut(dst.add(y * dst_stride), w * 4);
-                for x in 0..w {
-                    let so = x * 4;
-                    let do_off = x * 4;
-                    dst_row[do_off] = src_row[so + 2]; // B
-                    dst_row[do_off + 1] = src_row[so + 1]; // G
-                    dst_row[do_off + 2] = src_row[so]; // R
-                    dst_row[do_off + 3] = src_row[so + 3]; // A
-                }
+                let src_ptr = src_rgba.as_ptr().add(y * src_stride);
+                let dst_ptr = dst.add(y * dst_stride);
+                core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, row_bytes);
             }
 
             XShmPutImage(

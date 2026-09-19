@@ -599,7 +599,7 @@ pub unsafe fn egl_make_current(
             if surf.hal_color_image.is_none() {
                 let c_img = gl
                     .hal_device
-                    .create_image(vantage_hal::Format::R8G8B8A8Unorm, w, h);
+                    .create_image(vantage_hal::Format::B8G8R8A8Unorm, w, h);
                 let d_img = gl
                     .hal_device
                     .create_image(vantage_hal::Format::D32Sfloat, w, h);
@@ -747,7 +747,7 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
 
             let mut surf = surf_arc.lock();
             if surf.hal_color_image.is_none() {
-                let c_img = gl.hal_device.create_image(vantage_hal::Format::R8G8B8A8Unorm, w, h);
+                let c_img = gl.hal_device.create_image(vantage_hal::Format::B8G8R8A8Unorm, w, h);
                 let d_img = gl.hal_device.create_image(vantage_hal::Format::D32Sfloat, w, h);
                 surf.hal_color_image = Some(c_img);
                 surf.hal_depth_image = Some(d_img);

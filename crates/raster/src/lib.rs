@@ -340,18 +340,21 @@ fn clamp01(x: f32) -> f32 {
     }
 }
 
+#[inline(always)]
 fn wrap_coord(x: f32, mode: u32) -> f32 {
-    match mode {
-        gl::REPEAT => x - libm::floorf(x),
-        gl::MIRRORED_REPEAT => {
-            let f = x - libm::floorf(x);
-            if (libm::floorf(x) as i64) & 1 == 0 {
-                f
-            } else {
-                1.0 - f
-            }
+    if mode == gl::REPEAT {
+        if x >= 0.0 && x < 1.0 {
+            x
+        } else {
+            let i = x as i32;
+            let f = x - (i as f32);
+            if f < 0.0 { f + 1.0 } else { f }
         }
-        _ => clamp01(x), // CLAMP_TO_EDGE
+    } else if mode == gl::CLAMP_TO_EDGE {
+        clamp01(x)
+    } else {
+        let f = if x >= 0.0 && x < 1.0 { x } else { x - libm::floorf(x) };
+        if (libm::floorf(x) as i64) & 1 == 0 { f } else { 1.0 - f }
     }
 }
 
@@ -370,17 +373,29 @@ fn texel_or_edge(tex: &SampledTexture, x: i64, y: i64) -> (i64, i64) {
     }
 }
 
+#[inline(always)]
 fn sample_texel(tex: &SampledTexture, u: f32, v: f32, linear: bool) -> [f32; 4] {
-    if !tex.enabled || tex.width == 0 || tex.height == 0 {
+    if !tex.enabled || tex.width == 0 || tex.height == 0 || tex.data.is_null() {
         return [0.0, 0.0, 0.0, 1.0];
     }
     let fu = wrap_coord(u, tex.wrap_s) * tex.width as f32;
     let fv = wrap_coord(v, tex.wrap_t) * tex.height as f32;
-    let [r, g, b, a] = if linear {
-        bilinear(tex, fu, fv)
-    } else {
-        nearest(tex, fu, fv)
-    };
+    if !linear {
+        let x = (fu as usize).min(tex.width as usize - 1);
+        let y = (fv as usize).min(tex.height as usize - 1);
+        let o = (y * tex.width as usize + x) * 4;
+        if o + 4 <= tex.data_len {
+            unsafe {
+                let p = tex.data.add(o);
+                let r = *p as f32 * (1.0 / 255.0);
+                let g = *p.add(1) as f32 * (1.0 / 255.0);
+                let b = *p.add(2) as f32 * (1.0 / 255.0);
+                let a = *p.add(3) as f32 * (1.0 / 255.0);
+                return expand_to_rgba(tex.format, r, g, b, a);
+            }
+        }
+    }
+    let [r, g, b, a] = bilinear(tex, fu, fv);
     expand_to_rgba(tex.format, r, g, b, a)
 }
 
@@ -402,8 +417,8 @@ fn fetch(tex: &SampledTexture, x: i64, y: i64) -> [f32; 4] {
 }
 
 fn nearest(tex: &SampledTexture, fu: f32, fv: f32) -> [f32; 4] {
-    let x = libm::floorf(fu - 0.5) as i64;
-    let y = libm::floorf(fv - 0.5) as i64;
+    let x = libm::floorf(fu) as i64;
+    let y = libm::floorf(fv) as i64;
     fetch(tex, x, y)
 }
 
@@ -674,16 +689,8 @@ impl<'a> PrimitiveRasterizer<'a> {
     }
 
     #[inline]
+    #[inline(always)]
     pub fn shade_and_blend_pixel(&mut self, px: i32, py: i32, z: f32, varying: &Varyings) {
-        if px < 0 || py < 0 || px >= self.targets.width as i32 || py >= self.targets.height as i32 {
-            return;
-        }
-        if let Some((sx, sy, sw, sh)) = self.state.scissor {
-            if px < sx || py < sy || px >= sx + sw as i32 || py >= sy + sh as i32 {
-                return;
-            }
-        }
-
         let pixel_idx = (py as usize) * (self.targets.width as usize) + (px as usize);
 
         // 1. Fragment Function (color, texenv, fog, alpha-test)
@@ -700,14 +707,16 @@ impl<'a> PrimitiveRasterizer<'a> {
         }
 
         // 2. Stencil Test
-        let (stencil_enabled, stencil_pass) = self.test_stencil(pixel_idx);
-        if stencil_enabled && !stencil_pass {
-            self.apply_stencil_op(pixel_idx, self.state.stencil_fail);
-            return;
+        if self.state.stencil_test {
+            let (stencil_enabled, stencil_pass) = self.test_stencil(pixel_idx);
+            if stencil_enabled && !stencil_pass {
+                self.apply_stencil_op(pixel_idx, self.state.stencil_fail);
+                return;
+            }
         }
 
         // 3. Depth Test
-        let depth_pass = if self.state.depth_test {
+        if self.state.depth_test {
             if let Some(ref depth) = self.targets.depth {
                 let off = pixel_idx * 4;
                 let fb_z = f32::from_ne_bytes([
@@ -716,23 +725,17 @@ impl<'a> PrimitiveRasterizer<'a> {
                     depth[off + 2],
                     depth[off + 3],
                 ]);
-                depth_pass(self.state.depth_func, z, fb_z)
-            } else {
-                true
+                if !depth_pass(self.state.depth_func, z, fb_z) {
+                    if self.state.stencil_test {
+                        self.apply_stencil_op(pixel_idx, self.state.stencil_zfail);
+                    }
+                    return;
+                }
             }
-        } else {
-            true
-        };
+        }
 
-        if stencil_enabled {
-            if !depth_pass {
-                self.apply_stencil_op(pixel_idx, self.state.stencil_zfail);
-                return;
-            } else {
-                self.apply_stencil_op(pixel_idx, self.state.stencil_zpass);
-            }
-        } else if !depth_pass {
-            return;
+        if self.state.stencil_test {
+            self.apply_stencil_op(pixel_idx, self.state.stencil_zpass);
         }
 
         // 4. Depth Write
@@ -745,123 +748,68 @@ impl<'a> PrimitiveRasterizer<'a> {
 
         // 5. Blending & Color write
         let color_off = (py as usize) * (self.targets.color_stride as usize) + (px as usize) * 4;
-        let c_dst = &self.targets.color[color_off..color_off + 4];
+        let c_out = &mut self.targets.color[color_off..color_off + 4];
 
-        // frag_color is BGRA8 (o[0]=B, o[1]=G, o[2]=R, o[3]=A)
+        // Fast-path: opaque write without blending
+        if !self.state.blend_enabled && self.state.color_mask == 0x0F {
+            if self.targets.bgra_order {
+                c_out.copy_from_slice(&frag_color);
+            } else {
+                c_out[0] = frag_color[2];
+                c_out[1] = frag_color[1];
+                c_out[2] = frag_color[0];
+                c_out[3] = frag_color[3];
+            }
+            return;
+        }
+
         let (src_r, src_g, src_b, src_a) = (
-            frag_color[2] as f32 / 255.0,
-            frag_color[1] as f32 / 255.0,
-            frag_color[0] as f32 / 255.0,
-            frag_color[3] as f32 / 255.0,
+            frag_color[2] as f32 * (1.0 / 255.0),
+            frag_color[1] as f32 * (1.0 / 255.0),
+            frag_color[0] as f32 * (1.0 / 255.0),
+            frag_color[3] as f32 * (1.0 / 255.0),
         );
 
         let (dst_r, dst_g, dst_b, dst_a) = if self.targets.bgra_order {
             (
-                c_dst[2] as f32 / 255.0,
-                c_dst[1] as f32 / 255.0,
-                c_dst[0] as f32 / 255.0,
-                c_dst[3] as f32 / 255.0,
+                c_out[2] as f32 * (1.0 / 255.0),
+                c_out[1] as f32 * (1.0 / 255.0),
+                c_out[0] as f32 * (1.0 / 255.0),
+                c_out[3] as f32 * (1.0 / 255.0),
             )
         } else {
             (
-                c_dst[0] as f32 / 255.0,
-                c_dst[1] as f32 / 255.0,
-                c_dst[2] as f32 / 255.0,
-                c_dst[3] as f32 / 255.0,
+                c_out[0] as f32 * (1.0 / 255.0),
+                c_out[1] as f32 * (1.0 / 255.0),
+                c_out[2] as f32 * (1.0 / 255.0),
+                c_out[3] as f32 * (1.0 / 255.0),
             )
         };
 
-        let (final_r, final_g, final_b, final_a) = if self.state.blend_enabled {
-            let cc = self.state.blend_color;
-            let r = Self::blend_channel(
-                src_r,
-                dst_r,
-                self.state.src_rgb,
-                self.state.dst_rgb,
-                src_r,
-                dst_r,
-                src_a,
-                dst_a,
-                cc[0],
-                cc[3],
-            );
-            let g = Self::blend_channel(
-                src_g,
-                dst_g,
-                self.state.src_rgb,
-                self.state.dst_rgb,
-                src_g,
-                dst_g,
-                src_a,
-                dst_a,
-                cc[1],
-                cc[3],
-            );
-            let b = Self::blend_channel(
-                src_b,
-                dst_b,
-                self.state.src_rgb,
-                self.state.dst_rgb,
-                src_b,
-                dst_b,
-                src_a,
-                dst_a,
-                cc[2],
-                cc[3],
-            );
-            let a = Self::blend_channel(
-                src_a,
-                dst_a,
-                self.state.src_alpha,
-                self.state.dst_alpha,
-                src_a,
-                dst_a,
-                src_a,
-                dst_a,
-                cc[3],
-                cc[3],
-            );
-            (r, g, b, a)
-        } else {
-            (src_r, src_g, src_b, src_a)
-        };
+        let cc = self.state.blend_color;
+        let r = Self::blend_channel(src_r, dst_r, self.state.src_rgb, self.state.dst_rgb, src_r, dst_r, src_a, dst_a, cc[0], cc[3]);
+        let g = Self::blend_channel(src_g, dst_g, self.state.src_rgb, self.state.dst_rgb, src_g, dst_g, src_a, dst_a, cc[1], cc[3]);
+        let b = Self::blend_channel(src_b, dst_b, self.state.src_rgb, self.state.dst_rgb, src_b, dst_b, src_a, dst_a, cc[2], cc[3]);
+        let a = Self::blend_channel(src_a, dst_a, self.state.src_alpha, self.state.dst_alpha, src_a, dst_a, src_a, dst_a, cc[3], cc[3]);
 
-        let out_r = (final_r * 255.0 + 0.5) as u8;
-        let out_g = (final_g * 255.0 + 0.5) as u8;
-        let out_b = (final_b * 255.0 + 0.5) as u8;
-        let out_a = (final_a * 255.0 + 0.5) as u8;
+        let out_r = (r * 255.0 + 0.5) as u8;
+        let out_g = (g * 255.0 + 0.5) as u8;
+        let out_b = (b * 255.0 + 0.5) as u8;
+        let out_a = (a * 255.0 + 0.5) as u8;
 
         let mask = self.state.color_mask;
-        let c_out = &mut self.targets.color[color_off..color_off + 4];
         if self.targets.bgra_order {
-            if mask & 1 != 0 {
-                c_out[2] = out_r;
-            }
-            if mask & 2 != 0 {
-                c_out[1] = out_g;
-            }
-            if mask & 4 != 0 {
-                c_out[0] = out_b;
-            }
-            if mask & 8 != 0 {
-                c_out[3] = out_a;
-            }
+            if mask & 1 != 0 { c_out[2] = out_r; }
+            if mask & 2 != 0 { c_out[1] = out_g; }
+            if mask & 4 != 0 { c_out[0] = out_b; }
+            if mask & 8 != 0 { c_out[3] = out_a; }
         } else {
-            if mask & 1 != 0 {
-                c_out[0] = out_r;
-            }
-            if mask & 2 != 0 {
-                c_out[1] = out_g;
-            }
-            if mask & 4 != 0 {
-                c_out[2] = out_b;
-            }
-            if mask & 8 != 0 {
-                c_out[3] = out_a;
-            }
+            if mask & 1 != 0 { c_out[0] = out_r; }
+            if mask & 2 != 0 { c_out[1] = out_g; }
+            if mask & 4 != 0 { c_out[2] = out_b; }
+            if mask & 8 != 0 { c_out[3] = out_a; }
         }
     }
-
     /// Project clip coordinate (x,y,z,w) -> screen coordinate (px, py, z)
     pub fn project_vertex(&self, v: &Vertex) -> Option<([f32; 3], f32)> {
         if v.pos[3] <= 0.000001 {
@@ -893,12 +841,12 @@ impl<'a> PrimitiveRasterizer<'a> {
         };
 
         // 28.4 fixed-point coordinates
-        let x0 = libm::roundf((p0[0] * 16.0)) as i64;
-        let y0 = libm::roundf((p0[1] * 16.0)) as i64;
-        let x1 = libm::roundf((p1[0] * 16.0)) as i64;
-        let y1 = libm::roundf((p1[1] * 16.0)) as i64;
-        let x2 = libm::roundf((p2[0] * 16.0)) as i64;
-        let y2 = libm::roundf((p2[1] * 16.0)) as i64;
+        let x0 = libm::roundf(p0[0] * 16.0) as i64;
+        let y0 = libm::roundf(p0[1] * 16.0) as i64;
+        let x1 = libm::roundf(p1[0] * 16.0) as i64;
+        let y1 = libm::roundf(p1[1] * 16.0) as i64;
+        let x2 = libm::roundf(p2[0] * 16.0) as i64;
+        let y2 = libm::roundf(p2[1] * 16.0) as i64;
 
         // Signed area * 2 (in 24.8)
         let area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
@@ -927,84 +875,178 @@ impl<'a> PrimitiveRasterizer<'a> {
                 + self.state.polygon_offset_units * 0.00001;
         }
 
-        // Bounding box
-        let min_x = ((x0.min(x1).min(x2)) >> 4).max(0) as i32;
-        let max_x = ((x0.max(x1).max(x2) + 15) >> 4).min(self.targets.width as i64 - 1) as i32;
-        let min_y = ((y0.min(y1).min(y2)) >> 4).max(0) as i32;
-        let max_y = ((y0.max(y1).max(y2) + 15) >> 4).min(self.targets.height as i64 - 1) as i32;
+        // Scissor & Viewport clamping for bounding box
+        let (min_clip_x, max_clip_x, min_clip_y, max_clip_y) = if let Some((sx, sy, sw, sh)) = self.state.scissor {
+            (
+                sx.max(0),
+                (sx + sw as i32).min(self.targets.width as i32),
+                sy.max(0),
+                (sy + sh as i32).min(self.targets.height as i32),
+            )
+        } else {
+            (0, self.targets.width as i32, 0, self.targets.height as i32)
+        };
 
-        let inv_area = 1.0 / (area as f32);
+        let min_x = (((x0.min(x1).min(x2)) >> 4) as i32).max(min_clip_x);
+        let max_x = (((x0.max(x1).max(x2) + 15) >> 4) as i32).min(max_clip_x - 1);
+        let min_y = (((y0.min(y1).min(y2)) >> 4) as i32).max(min_clip_y);
+        let max_y = (((y0.max(y1).max(y2) + 15) >> 4) as i32).min(max_clip_y - 1);
 
-        // Scanline rasterization
+        if min_x > max_x || min_y > max_y {
+            return;
+        }
+
+        // Edge step increments
+        // w(x, y) = (x_b - x_a) * (fy - y_a) - (y_b - y_a) * (fx - x_a)
+        // dw/dx = -(y_b - y_a) * 16
+        // dw/dy = (x_b - x_a) * 16
+        let (sign, a_val) = if area > 0 { (1i64, area) } else { (-1i64, -area) };
+        let inv_area = 1.0 / (a_val as f32);
+
+        let a01 = -(y2 - y1) * 16 * sign;
+        let b01 = (x2 - x1) * 16 * sign;
+
+        let a12 = -(y0 - y2) * 16 * sign;
+        let b12 = (x0 - x2) * 16 * sign;
+
+        let a20 = -(y1 - y0) * 16 * sign;
+        let b20 = (x1 - x0) * 16 * sign;
+
+        // Plane equations for attribute interpolation:
+        // For attribute Q: dQ/dx and dQ/dy
+        let float_det = ((p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]));
+        if float_det.abs() < 1e-12 {
+            return;
+        }
+        let inv_det = 1.0 / float_det;
+
+        let calc_gradients = |q0: f32, q1: f32, q2: f32| -> (f32, f32) {
+            let dq1 = q1 - q0;
+            let dq2 = q2 - q0;
+            let dq_dx = (dq1 * (p2[1] - p0[1]) - dq2 * (p1[1] - p0[1])) * inv_det;
+            let dq_dy = (dq2 * (p1[0] - p0[0]) - dq1 * (p2[0] - p0[0])) * inv_det;
+            (dq_dx, dq_dy)
+        };
+
+        let (dz_dx, dz_dy) = calc_gradients(p0[2], p1[2], p2[2]);
+        let (dw_dx, dw_dy) = calc_gradients(w0, w1, w2);
+
+        // Perspective-correct texture coordinates: interpolate u*w and v*w
+        let (du0_dx, du0_dy) = calc_gradients(v0.tex0[0] * w0, v1.tex0[0] * w1, v2.tex0[0] * w2);
+        let (dv0_dx, dv0_dy) = calc_gradients(v0.tex0[1] * w0, v1.tex0[1] * w1, v2.tex0[1] * w2);
+
+        let (dr_dx, dr_dy) = calc_gradients(v0.color[0], v1.color[0], v2.color[0]);
+        let (dg_dx, dg_dy) = calc_gradients(v0.color[1], v1.color[1], v2.color[1]);
+        let (db_dx, db_dy) = calc_gradients(v0.color[2], v1.color[2], v2.color[2]);
+        let (da_dx, da_dy) = calc_gradients(v0.color[3], v1.color[3], v2.color[3]);
+
+        // Start coordinates at (min_x + 0.5, min_y + 0.5)
+        let start_fx = (min_x as i64 * 16) + 8;
+        let start_fy = (min_y as i64 * 16) + 8;
+
+        let mut row_w0 = ((x2 - x1) * (start_fy - y1) - (y2 - y1) * (start_fx - x1)) * sign;
+        let mut row_w1 = ((x0 - x2) * (start_fy - y2) - (y0 - y2) * (start_fx - x2)) * sign;
+        let mut row_w2 = ((x1 - x0) * (start_fy - y0) - (y1 - y0) * (start_fx - x0)) * sign;
+
+        let start_dx = (min_x as f32 + 0.5) - p0[0];
+        let start_dy = (min_y as f32 + 0.5) - p0[1];
+
+        let mut row_z = p0[2] + dz_dx * start_dx + dz_dy * start_dy + z_offset;
+        let mut row_w = w0 + dw_dx * start_dx + dw_dy * start_dy;
+        let mut row_u0 = v0.tex0[0] * w0 + du0_dx * start_dx + du0_dy * start_dy;
+        let mut row_v0 = v0.tex0[1] * w0 + dv0_dx * start_dx + dv0_dy * start_dy;
+        let mut row_r = v0.color[0] + dr_dx * start_dx + dr_dy * start_dy;
+        let mut row_g = v0.color[1] + dg_dx * start_dx + dg_dy * start_dy;
+        let mut row_b = v0.color[2] + db_dx * start_dx + db_dy * start_dy;
+        let mut row_a = v0.color[3] + da_dx * start_dx + da_dy * start_dy;
+
+        // Check if early-Z can be enabled (alpha test disabled)
+        let alpha_test_active = unsafe {
+            let st = &*self.frag_ctx;
+            st.alpha_func != gl::ALWAYS
+        };
+
         for py in min_y..=max_y {
-            let fy = (py as i64 * 16) + 8; // pixel center in 28.4
+            let mut w0_edge = row_w0;
+            let mut w1_edge = row_w1;
+            let mut w2_edge = row_w2;
+
+            let mut z = row_z;
+            let mut w = row_w;
+            let mut u0 = row_u0;
+            let mut v0_coord = row_v0;
+            let mut cr = row_r;
+            let mut cg = row_g;
+            let mut cb = row_b;
+            let mut ca = row_a;
+
             for px in min_x..=max_x {
-                let fx = (px as i64 * 16) + 8;
+                if (w0_edge | w1_edge | w2_edge) >= 0 {
+                    // Early-Z test when alpha testing is disabled
+                    let mut skip_frag = false;
+                    let pixel_idx = (py as usize) * (self.targets.width as usize) + (px as usize);
 
-                // Edge functions (top-left rule)
-                let w0_edge = (x2 - x1) * (fy - y1) - (y2 - y1) * (fx - x1);
-                let w1_edge = (x0 - x2) * (fy - y2) - (y0 - y2) * (fx - x2);
-                let w2_edge = (x1 - x0) * (fy - y0) - (y1 - y0) * (fx - x0);
+                    if !alpha_test_active && self.state.depth_test && !self.state.stencil_test {
+                        if let Some(ref depth) = self.targets.depth {
+                            let off = pixel_idx * 4;
+                            let fb_z = f32::from_ne_bytes([depth[off], depth[off+1], depth[off+2], depth[off+3]]);
+                            if !depth_pass(self.state.depth_func, z, fb_z) {
+                                skip_frag = true;
+                            }
+                        }
+                    }
 
-                let inside = if area > 0 {
-                    w0_edge >= 0 && w1_edge >= 0 && w2_edge >= 0
-                } else {
-                    w0_edge <= 0 && w1_edge <= 0 && w2_edge <= 0
-                };
-
-                if !inside {
-                    continue;
+                    if !skip_frag {
+                        let inv_w = 1.0 / w.max(1e-12);
+                        let varying = if self.state.shade_flat {
+                            Varyings {
+                                color: v2.color,
+                                tex0: [u0 * inv_w, v0_coord * inv_w],
+                                tex1: [0.0, 0.0],
+                                fog: p2[2],
+                                view_z: p2[2],
+                            }
+                        } else {
+                            Varyings {
+                                color: [cr, cg, cb, ca],
+                                tex0: [u0 * inv_w, v0_coord * inv_w],
+                                tex1: [0.0, 0.0],
+                                fog: z,
+                                view_z: z,
+                            }
+                        };
+                        self.shade_and_blend_pixel(px, py, z, &varying);
+                    }
                 }
 
-                let l0 = (w0_edge as f32) * inv_area;
-                let l1 = (w1_edge as f32) * inv_area;
-                let l2 = (w2_edge as f32) * inv_area;
+                w0_edge += a01;
+                w1_edge += a12;
+                w2_edge += a20;
 
-                let interp_z = l0 * p0[2] + l1 * p1[2] + l2 * p2[2] + z_offset;
-                let interp_w = l0 * w0 + l1 * w1 + l2 * w2;
-                let r_w = 1.0 / interp_w;
-
-                // Varyings interpolation
-                let varying = if self.state.shade_flat {
-                    // Provoking vertex is the last vertex v2
-                    Varyings {
-                        color: v2.color,
-                        tex0: [v2.tex0[0], v2.tex0[1]],
-                        tex1: [v2.tex1[0], v2.tex1[1]],
-                        fog: v2.fog,
-                        view_z: p2[2],
-                    }
-                } else {
-                    Varyings {
-                        color: [
-                            l0 * v0.color[0] + l1 * v1.color[0] + l2 * v2.color[0],
-                            l0 * v0.color[1] + l1 * v1.color[1] + l2 * v2.color[1],
-                            l0 * v0.color[2] + l1 * v1.color[2] + l2 * v2.color[2],
-                            l0 * v0.color[3] + l1 * v1.color[3] + l2 * v2.color[3],
-                        ],
-                        // Perspective-correct texture coordinates
-                        tex0: [
-                            (l0 * v0.tex0[0] * w0 + l1 * v1.tex0[0] * w1 + l2 * v2.tex0[0] * w2)
-                                * r_w,
-                            (l0 * v0.tex0[1] * w0 + l1 * v1.tex0[1] * w1 + l2 * v2.tex0[1] * w2)
-                                * r_w,
-                        ],
-                        tex1: [
-                            (l0 * v0.tex1[0] * w0 + l1 * v1.tex1[0] * w1 + l2 * v2.tex1[0] * w2)
-                                * r_w,
-                            (l0 * v0.tex1[1] * w0 + l1 * v1.tex1[1] * w1 + l2 * v2.tex1[1] * w2)
-                                * r_w,
-                        ],
-                        fog: l0 * v0.fog + l1 * v1.fog + l2 * v2.fog,
-                        view_z: interp_z,
-                    }
-                };
-
-                self.shade_and_blend_pixel(px, py, interp_z, &varying);
+                z += dz_dx;
+                w += dw_dx;
+                u0 += du0_dx;
+                v0_coord += dv0_dx;
+                cr += dr_dx;
+                cg += dg_dx;
+                cb += db_dx;
+                ca += da_dx;
             }
+
+            row_w0 += b01;
+            row_w1 += b12;
+            row_w2 += b20;
+
+            row_z += dz_dy;
+            row_w += dw_dy;
+            row_u0 += du0_dy;
+            row_v0 += dv0_dy;
+            row_r += dr_dy;
+            row_g += dg_dy;
+            row_b += db_dy;
+            row_a += da_dy;
         }
     }
-
     pub fn draw_point(&mut self, v: &Vertex) {
         let Some((p, _w)) = self.project_vertex(v) else {
             return;

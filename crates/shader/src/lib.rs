@@ -205,38 +205,31 @@ fn apply_fog_eval(state: &FragState, color: &mut [f32; 4], fog: f32) {
     }
 }
 
-#[inline]
+#[inline(always)]
+fn wrap_c(x: f32, mode: u32) -> f32 {
+    if mode == gl::REPEAT {
+        if x >= 0.0 && x < 1.0 {
+            x
+        } else {
+            let i = x as i32;
+            let f = x - (i as f32);
+            if f < 0.0 { f + 1.0 } else { f }
+        }
+    } else if mode == gl::CLAMP_TO_EDGE {
+        clamp_unit(x)
+    } else {
+        let f = if x >= 0.0 && x < 1.0 { x } else { x - libm::floorf(x) };
+        if (libm::floorf(x) as i64) & 1 == 0 { f } else { 1.0 - f }
+    }
+}
+
+#[inline(always)]
 fn sample_tex(tex: &SampledTexture, u: f32, v: f32, linear: bool) -> [f32; 4] {
     if !tex.enabled || tex.width == 0 || tex.height == 0 || tex.data.is_null() {
         return [0.0, 0.0, 0.0, 1.0];
     }
-    let u_wrap = match tex.wrap_s {
-        gl::REPEAT => u - libm::floorf(u),
-        gl::MIRRORED_REPEAT => {
-            let f = u - libm::floorf(u);
-            if (libm::floorf(u) as i64) & 1 == 1 {
-                1.0 - f
-            } else {
-                f
-            }
-        }
-        _ => clamp_unit(u),
-    };
-    let v_wrap = match tex.wrap_t {
-        gl::REPEAT => v - libm::floorf(v),
-        gl::MIRRORED_REPEAT => {
-            let f = v - libm::floorf(v);
-            if (libm::floorf(v) as i64) & 1 == 1 {
-                1.0 - f
-            } else {
-                f
-            }
-        }
-        _ => clamp_unit(v),
-    };
-
-    let fu = u_wrap * tex.width as f32;
-    let fv = v_wrap * tex.height as f32;
+    let fu = wrap_c(u, tex.wrap_s) * tex.width as f32;
+    let fv = wrap_c(v, tex.wrap_t) * tex.height as f32;
 
     let fetch_texel = |x: i64, y: i64| -> [f32; 4] {
         let x = x.clamp(0, tex.width as i64 - 1);
@@ -273,8 +266,8 @@ fn sample_tex(tex: &SampledTexture, u: f32, v: f32, linear: bool) -> [f32; 4] {
         }
         out
     } else {
-        let x = libm::floorf(fu - 0.5) as i64;
-        let y = libm::floorf(fv - 0.5) as i64;
+        let x = libm::floorf(fu) as i64;
+        let y = libm::floorf(fv) as i64;
         fetch_texel(x, y)
     };
 
