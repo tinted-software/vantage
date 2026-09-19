@@ -403,10 +403,13 @@ pub fn get_gl_proc_address(name: &str) -> __eglMustCastToProperFunctionPointerTy
     if ptr.is_null() {
         None
     } else {
-        Some(unsafe { core::mem::transmute(ptr) })
+        Some(unsafe { core::mem::transmute::<*const (), unsafe extern "C" fn()>(ptr) })
     }
 }
 
 #[used]
-static GLES_EXPORT_KEEP: [unsafe extern "C" fn(); 1] =
-    [unsafe { core::mem::transmute(vantage_gles::glMatrixMode as *const ()) }];
+static GLES_EXPORT_KEEP: [unsafe extern "C" fn(); 1] = [unsafe {
+    core::mem::transmute::<*const (), unsafe extern "C" fn()>(
+        vantage_gles::glMatrixMode as *const (),
+    )
+}];

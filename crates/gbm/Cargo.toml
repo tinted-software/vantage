@@ -1,0 +1,34 @@
+[package]
+name = "vantage-gbm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "gbm.h-compatible Generic Buffer Manager over vantage-drm (Mesa libgbm replacement)."
+
+[features]
+default = ["std"]
+std = []
+capi = []
+
+[dependencies]
+spin.workspace = true
+vantage-drm = { path = "../drm" }
+
+[lib]
+name = "vantage_gbm"
+crate-type = ["rlib", "cdylib"]
+
+[package.metadata.capi.library]
+name = "gbm_vantage"
+
+[package.metadata.capi.header]
+name = "gbm"
+subdirectory = "gbm"
+generation = false
+
+[package.metadata.capi.install.include]
+# Mesa's gbm.h verbatim: libgbm's ABI is its header, and consumers (weston
+# etc.) compile against exactly this text. Our cdylib exports match it.
+asset = [
+    { from = "../../include/gbm/gbm.h", to = "gbm" },
+]

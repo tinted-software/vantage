@@ -24,6 +24,9 @@ pub struct EglSurfaceState {
     pub hal_depth_image: Option<vantage_hal::ImageId>,
     #[cfg(all(feature = "std", target_os = "linux"))]
     pub x11_surface: Option<X11ShmSurface>,
+    /// DRI3/Present zero-copy path; preferred over SHM when available.
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    pub dri3_surface: Option<crate::platform::dri3::Dri3Surface>,
 }
 
 pub struct EglContextState {
@@ -378,7 +381,15 @@ pub unsafe fn egl_create_window_surface(
     };
 
     #[cfg(all(feature = "std", target_os = "linux"))]
-    let x11_surface = if win != 0 {
+    let dri3_surface = if win != 0 {
+        // DRI3 first: zero-copy GEM buffer sharing + Present flips.
+        crate::platform::dri3::Dri3Surface::new(win as u32, width, height)
+    } else {
+        None
+    };
+
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    let x11_surface = if win != 0 && dri3_surface.is_none() {
         let dpy_ptr = native_display_ptr() as *mut crate::platform::x11::x11_shm::Display;
         match unsafe { X11ShmSurface::new(dpy_ptr, win as u64, width, height) } {
             Ok(s) => Some(s),
@@ -401,6 +412,8 @@ pub unsafe fn egl_create_window_surface(
         hal_depth_image: None,
         #[cfg(all(feature = "std", target_os = "linux"))]
         x11_surface,
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        dri3_surface,
     }));
 
     {
@@ -435,8 +448,15 @@ pub unsafe fn egl_create_native_window_surface(
     let width = if n.width == 0 { 800 } else { n.width }.max(1);
     let height = if n.height == 0 { 600 } else { n.height }.max(1);
 
-    #[cfg(all(feature = "std", target_os = "linux"))]
-    let x11_surface = if n.kind == ANGLE_WGPU_NATIVE_X11 {
+    #[cfg(all(feature = "std", any(target_os = "linux", target_os = "freebsd")))]
+    let dri3_surface = if n.kind == ANGLE_WGPU_NATIVE_X11 {
+        crate::platform::dri3::Dri3Surface::new(n.window as u32, width, height)
+    } else {
+        None
+    };
+
+    #[cfg(all(feature = "std", any(target_os = "linux", target_os = "freebsd")))]
+    let x11_surface = if n.kind == ANGLE_WGPU_NATIVE_X11 && dri3_surface.is_none() {
         let dpy_ptr = n.display as *mut crate::platform::x11::x11_shm::Display;
         match unsafe { X11ShmSurface::new(dpy_ptr, n.window, width, height) } {
             Ok(s) => Some(s),
@@ -470,6 +490,8 @@ pub unsafe fn egl_create_native_window_surface(
         hal_depth_image: None,
         #[cfg(all(feature = "std", target_os = "linux"))]
         x11_surface,
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        dri3_surface,
     }));
 
     {
@@ -705,7 +727,19 @@ pub unsafe fn egl_swap_buffers(_dpy: EGLDisplay, surface: EGLSurface) -> EGLBool
         {
             let mut surf = surf_arc.lock();
             let c_id_opt = surf.hal_color_image;
-            if let Some(ref mut x11) = surf.x11_surface {
+            let interval = surf.swap_interval;
+            if let Some(ref mut dri3) = surf.dri3_surface {
+                if let Some(c_id) = c_id_opt {
+                    if let Some(img) = ctx.hal_device.image(c_id) {
+                        let stride = (img.width * 4) as usize;
+                        dri3.swap_interval = interval;
+                        if !dri3.present(&img.data, stride) {
+                            set_egl_error(EGL_BAD_ACCESS);
+                            return EGL_FALSE;
+                        }
+                    }
+                }
+            } else if let Some(ref mut x11) = surf.x11_surface {
                 if let Some(c_id) = c_id_opt {
                     if let Some(img) = ctx.hal_device.image(c_id) {
                         unsafe {
@@ -734,6 +768,14 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
             s.height = h;
             s.hal_color_image = None;
             s.hal_depth_image = None;
+
+            #[cfg(all(feature = "std", target_os = "linux"))]
+            if let Some(ref mut dri3) = s.dri3_surface {
+                if !dri3.resize(w, h) {
+                    set_egl_error(EGL_BAD_ALLOC);
+                    return EGL_FALSE;
+                }
+            }
 
             #[cfg(all(feature = "std", target_os = "linux"))]
             if let Some(ref mut x11) = s.x11_surface {

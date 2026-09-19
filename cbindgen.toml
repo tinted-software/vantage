@@ -27,7 +27,6 @@ typedef double GLclampd;
 typedef int GLfixed;
 typedef int GLclampx;
 typedef intptr_t GLintptr;
-typedef size_t GLsizeiptr;
 
 typedef int EGLint;
 typedef unsigned int EGLBoolean;
@@ -38,10 +37,6 @@ typedef void *EGLDisplay;
 typedef void *EGLSurface;
 typedef void *EGLClientBuffer;
 typedef void (*__eglMustCastToProperFunctionPointerType)(void);
-
-typedef void *NativeDisplayType;
-typedef uintptr_t NativeWindowType;
-typedef uintptr_t NativePixmapType;
 """
 
 [parse]

@@ -33,12 +33,12 @@ pub type EGLint = i32;
 pub type EGLBoolean = u32;
 pub type EGLenum = u32;
 pub type NativeDisplayType = *mut c_void;
-#[cfg(windows)]
-pub type NativeWindowType = *mut c_void;
-// Non-Windows (X11: Window/XID; Wayland callers cast wl_surface* through
-// uintptr_t, mirroring Khronos headers where the window system is chosen by
-// the consumer).
-#[cfg(not(windows))]
+/// Pointer-sized host window handle: X11 `Window`/XID (Wayland callers cast
+/// `wl_surface*` through the same integer). Win32 `HWND` is pointer-sized
+/// too, so the alias stays platform-independent at the ABI level — Khronos
+/// fixes the platform choice in `eglplatform.h`, not in this library.
+/// (A `#[cfg(windows)]` twin here made cargo-c/cbindgen emit both arms into
+/// `vantage.h`: cfg is dropped for type aliases, breaking the header.)
 pub type NativeWindowType = usize;
 pub type NativePixmapType = *mut c_void;
 // Standard Khronos platform aliases used by EGL clients (see eglplatform.h).

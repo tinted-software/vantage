@@ -1,0 +1,9 @@
+[package]
+name = "vantage-drm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Linux DRM client substrate: render nodes, dumb GEM buffers, PRIME fd passing. Rust replacement for libdrm."
+
+[features]
+default = []

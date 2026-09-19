@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/hal", "crates/raster", "crates/shader", "crates/gles", "crates/egl", "crates/vulkan"]
+members = ["crates/hal", "crates/raster", "crates/shader", "crates/gles", "crates/egl", "crates/vulkan", "crates/drm", "crates/gbm"]
 resolver = "3"
 
 [workspace.dependencies]
@@ -9,6 +9,7 @@ hashbrown = { version = "0.17.1", default-features = false, features = ["alloc",
 lock_api = "0.4.14"
 libm = { version = "0.2.16", default-features = false }
 rspirv = { git = "https://github.com/gfx-rs/rspirv", default-features = false }
+spin = { version = "0.12.3", default-features = false, features = ["mutex", "spin_mutex", "rwlock", "once", "lazy"] }
 spirv = { git = "https://github.com/gfx-rs/rspirv", default-features = false }
 
 [profile.dev]

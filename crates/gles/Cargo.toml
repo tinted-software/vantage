@@ -12,7 +12,6 @@ crate-type = ["rlib"]
 [features]
 default = ["std"]
 std = []
-capi = []
 
 [dependencies]
 smallvec = { version = "1.16.1", default-features = false }
@@ -24,5 +23,5 @@ vantage-shader = { path = "../shader", default-features = false }
 bytemuck.workspace = true
 glam.workspace = true
 hashbrown.workspace = true
-lock_api.workspace = true
+spin.workspace = true
 libm.workspace = true

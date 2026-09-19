@@ -562,13 +562,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "vantage-drm"
+version = "0.1.0"
+
+[[package]]
 name = "vantage-egl"
 version = "0.1.0"
 dependencies = [
  "libc",
  "libloading",
+ "spin",
+ "vantage-drm",
  "vantage-gles",
  "vantage-hal",
+]
+
+[[package]]
+name = "vantage-gbm"
+version = "0.1.0"
+dependencies = [
+ "spin",
+ "vantage-drm",
 ]
 
 [[package]]
@@ -579,8 +593,8 @@ dependencies = [
  "glam",
  "hashbrown",
  "libm",
- "lock_api",
  "smallvec",
+ "spin",
  "vantage-hal",
  "vantage-raster",
  "vantage-shader",

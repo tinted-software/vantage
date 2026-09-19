@@ -562,7 +562,11 @@ fn apply_fog(state: &FragState, color: &mut [f32; 4], fog: f32) {
 /// Reference scalar fragment shader (also the test oracle): texenv chain over
 /// unit 0 then unit 1, fog, alpha test.
 #[inline(always)]
-pub fn reference_frag(ctx: *const FragState, varying: *const Varyings, out: *mut [u8; 4]) -> bool {
+pub unsafe fn reference_frag(
+    ctx: *const FragState,
+    varying: *const Varyings,
+    out: *mut [u8; 4],
+) -> bool {
     unsafe {
         let st = &*ctx;
         let v = &*varying;
@@ -733,11 +737,13 @@ impl<'a> PrimitiveRasterizer<'a> {
         // 1. Fragment Function (color, texenv, fog, alpha-test)
         let mut frag_color = [0u8; 4]; // BGRA8
         let alpha_pass = if self.frag_fn as *const () == reference_frag as *const () {
-            reference_frag(
-                self.frag_ctx,
-                varying,
-                frag_color.as_mut_ptr() as *mut [u8; 4],
-            )
+            unsafe {
+                reference_frag(
+                    self.frag_ctx,
+                    varying,
+                    frag_color.as_mut_ptr() as *mut [u8; 4],
+                )
+            }
         } else {
             unsafe {
                 (self.frag_fn)(

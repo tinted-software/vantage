@@ -236,15 +236,7 @@ unsafe extern "C" fn egl_copy_buffers_stub(
     egl::set_egl_error(EGL_BAD_MATCH);
     EGL_FALSE
 }
-unsafe extern "C" fn egl_create_pixmap_surface_stub(
-    _dpy: EGLDisplay,
-    _config: EGLConfig,
-    _pixmap: *mut c_void,
-    _attrib_list: *const EGLint,
-) -> EGLSurface {
-    egl::set_egl_error(EGL_BAD_PARAMETER);
-    core::ptr::null_mut()
-}
+
 unsafe extern "C" fn egl_query_context_stub(
     _dpy: EGLDisplay,
     _ctx: EGLContext,

@@ -9,6 +9,7 @@
 #![no_std]
 extern crate alloc;
 
+#[cfg(feature = "std")]
 use alloc::sync::Arc;
 use hashbrown::HashMap;
 pub use vantage_raster::{gl, FragFn, FragState, SampledTexture, Varyings};
@@ -67,7 +68,7 @@ impl FragmentProgram {
     /// Evaluates the fragment program for the given state and varyings.
     /// Returns true if alpha test passed, false if discarded.
     #[inline]
-    pub fn evaluate(
+    pub unsafe fn evaluate(
         &self,
         ctx: *const FragState,
         varying: *const Varyings,
@@ -88,10 +89,7 @@ impl FragmentProgram {
                     continue;
                 }
                 let tc = if unit == 0 { v.tex0 } else { v.tex1 };
-                let linear = match tex.mag_filter {
-                    gl::NEAREST => false,
-                    _ => true,
-                };
+                let linear = !matches!(tex.mag_filter, gl::NEAREST);
                 let s = sample_tex(tex, tc[0], tc[1], linear);
                 color = apply_texenv(self.key.texenv_mode[unit], s, color, st.texenv_color[unit]);
             }
@@ -123,13 +121,7 @@ impl FragmentProgram {
 
 #[inline]
 fn clamp_unit(x: f32) -> f32 {
-    if x < 0.0 {
-        0.0
-    } else if x > 1.0 {
-        1.0
-    } else {
-        x
-    }
+    x.clamp(0.0, 1.0)
 }
 
 #[inline]
@@ -374,11 +366,13 @@ mod tests {
         let prog = FragmentProgram::compile(&key);
 
         let mut out_prog = [0u8; 4];
-        let pass_prog = prog.evaluate(&state, &varyings, out_prog.as_mut_ptr() as *mut [u8; 4]);
+        let pass_prog =
+            unsafe { prog.evaluate(&state, &varyings, out_prog.as_mut_ptr() as *mut [u8; 4]) };
 
         let mut out_ref = [0u8; 4];
-        let pass_ref =
-            vantage_raster::reference_frag(&state, &varyings, out_ref.as_mut_ptr() as *mut [u8; 4]);
+        let pass_ref = unsafe {
+            vantage_raster::reference_frag(&state, &varyings, out_ref.as_mut_ptr() as *mut [u8; 4])
+        };
 
         assert_eq!(pass_prog, pass_ref, "Alpha pass must match");
         assert_eq!(

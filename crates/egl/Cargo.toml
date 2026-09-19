@@ -16,13 +16,18 @@ capi = []
 
 [dependencies]
 libc = { version = "0.2", optional = true }
+vantage-drm = { path = "../drm", default-features = false }
 vantage-hal = { path = "../hal", default-features = false }
 
 vantage-gles = { path = "../gles", default-features = false }
 libloading = { version = "0.9.0", default-features = false, optional = true }
+spin.workspace = true
 
 [package.metadata.capi.library]
 name = "vantage"
+# SONAME libvantage.so.0 (major only) — matches the glvnd vendor JSON's
+# library_path; .so.0.1 would make glvnd's dlopen fail on every bump.
+version_suffix_components = 1
 
 [package.metadata.capi.pkg_config]
 filename = "glesv1_cm"
@@ -31,15 +36,23 @@ library = "vantage"
 strip_include_path_components = 1
 
 [package.metadata.capi.install.include]
+# Vendored Khronos registry headers (EGL-Registry + OpenGL-Registry api/) —
+# the normative EGL/GLES ABI. cbindgen generation is disabled below: emitting
+# our own typedefs would collide with these the moment a consumer includes
+# both (and with glvnd's own copies).
 asset = [
-    { from = "../../include/**/*", to = "." },
+    { from = "../../include/EGL/*.h", to = "EGL" },
+    { from = "../../include/GLES/*.h", to = "GLES" },
+    { from = "../../include/GLES2/*.h", to = "GLES2" },
+    { from = "../../include/KHR/*.h", to = "KHR" },
 ]
 
 [package.metadata.capi.install.data]
 asset = [
-    { from = "glvnd/egl_vendor.d/10_vantage.json", to = "glvnd/egl_vendor.d" },
+    { from = "../../glvnd/egl_vendor.d/10_vantage.json", to = "glvnd/egl_vendor.d" },
 ]
 
 [package.metadata.capi.header]
 name = "vantage"
 subdirectory = "vantage"
+generation = false
