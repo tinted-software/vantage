@@ -775,11 +775,38 @@ pub unsafe extern "C" fn glTexGen(_coord: GLenum, _pname: GLenum, _param: GLfloa
 
 pub unsafe extern "C" fn glTexGeni(_coord: GLenum, _pname: GLenum, _param: GLint) {}
 
-pub unsafe extern "C" fn glTexEnvf(_target: GLenum, _pname: GLenum, _param: GLfloat) {}
+pub unsafe extern "C" fn glTexEnvf(target: GLenum, pname: GLenum, param: GLfloat) {
+    glTexEnvi(target, pname, param as GLint);
+}
 
-pub unsafe extern "C" fn glTexEnvi(_target: GLenum, _pname: GLenum, _param: GLint) {}
+pub unsafe extern "C" fn glTexEnvi(target: GLenum, pname: GLenum, param: GLint) {
+    with_context(|ctx| {
+        let unit = ctx.texture_manager.active_unit.min(1);
+        if target == GL_TEXTURE_ENV && pname == GL_TEXTURE_ENV_MODE {
+            ctx.texenv_mode[unit] = param as GLenum;
+        }
+    });
+}
 
-pub unsafe extern "C" fn glTexEnvfv(_target: GLenum, _pname: GLenum, _params: *const GLfloat) {}
+pub unsafe extern "C" fn glTexEnvfv(target: GLenum, pname: GLenum, params: *const GLfloat) {
+    if params.is_null() {
+        return;
+    }
+    with_context(|ctx| {
+        let unit = ctx.texture_manager.active_unit.min(1);
+        if target == GL_TEXTURE_ENV {
+            if pname == GL_TEXTURE_ENV_COLOR {
+                unsafe {
+                    ctx.texenv_color[unit] = [*params, *params.add(1), *params.add(2), *params.add(3)];
+                }
+            } else if pname == GL_TEXTURE_ENV_MODE {
+                unsafe {
+                    ctx.texenv_mode[unit] = *params as GLenum;
+                }
+            }
+        }
+    });
+}
 
 // ============================================================================
 // States and Enables

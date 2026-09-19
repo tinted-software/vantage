@@ -120,6 +120,8 @@ pub struct GlContext {
 
     // Server enables
     pub texture_2d_enabled: bool,
+    pub texenv_mode: [GLenum; 2],
+    pub texenv_color: [[f32; 4]; 2],
     pub blend_enabled: bool,
     pub depth_test_enabled: bool,
     pub alpha_test_enabled: bool,
@@ -255,6 +257,8 @@ impl GlContext {
             buffers: hashbrown::HashMap::new(),
             next_buffer_id: 1,
             texture_2d_enabled: false,
+            texenv_mode: [GL_MODULATE; 2],
+            texenv_color: [[0.0; 4]; 2],
             blend_enabled: false,
             depth_test_enabled: false,
             alpha_test_enabled: false,
@@ -744,6 +748,49 @@ impl GlContext {
             depth_func: key.depth_func,
             color_mask: key.color_mask,
         });
+
+
+        // Construct FragState with active texture and fragment settings
+        let mut frag_state = vantage_raster::FragState::default();
+        frag_state.texenv_mode = self.texenv_mode;
+        frag_state.texenv_color = self.texenv_color;
+
+        if self.texture_2d_enabled {
+            if let Some(tex) = self.texture_manager.get_current_texture() {
+                if let Some(level0) = tex.level_data.get(&0) {
+                    frag_state.textures[0] = vantage_raster::SampledTexture {
+                        data: level0.as_ptr(),
+                        data_len: level0.len(),
+                        width: tex.width,
+                        height: tex.height,
+                        format: tex.format,
+                        min_filter: tex.min_filter,
+                        mag_filter: tex.mag_filter,
+                        wrap_s: tex.wrap_s,
+                        wrap_t: tex.wrap_t,
+                        enabled: true,
+                    };
+                }
+            }
+        }
+
+        frag_state.alpha_func = if self.alpha_test_enabled { self.alpha_func } else { vantage_raster::gl::ALWAYS };
+        frag_state.alpha_ref = self.alpha_ref;
+
+        if self.fog_enabled {
+            frag_state.fog_mode = match self.fog_mode {
+                GL_LINEAR => 1,
+                GL_EXP => 2,
+                GL_EXP2 => 3,
+                _ => 0,
+            };
+            frag_state.fog_start = self.fog_start;
+            frag_state.fog_end = self.fog_end;
+            frag_state.fog_density = self.fog_density;
+            frag_state.fog_color = self.fog_color;
+        }
+
+        self.command_buffer.push(vantage_hal::Cmd::SetFragState(alloc::boxed::Box::new(frag_state)));
 
         // Record draw commands
         self.command_buffer

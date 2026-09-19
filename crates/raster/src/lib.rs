@@ -135,6 +135,7 @@ pub struct Varyings {
 }
 
 /// One sampled texture as seen by fragment code.
+#[derive(Debug, Clone)]
 pub struct SampledTexture {
     /// RGBA8 texel data (level 0), already converted by the GLES layer.
     pub data: *const u8,
@@ -169,6 +170,7 @@ impl SampledTexture {
 }
 
 /// Per-pixel fragment context: textures, texenv, fog, alpha ref.
+#[derive(Debug, Clone)]
 pub struct FragState {
     /// Texture units 0..2 (GLES1 CM exposure in this driver).
     pub textures: [SampledTexture; 2],
@@ -186,6 +188,24 @@ pub struct FragState {
     pub fog_density: f32,
     pub fog_color: [f32; 4],
 }
+
+impl Default for FragState {
+    fn default() -> Self {
+        Self {
+            textures: [SampledTexture::disabled(), SampledTexture::disabled()],
+            texenv_mode: [gl::TEXENV_MODULATE; 2],
+            texenv_color: [[0.0; 4]; 2],
+            alpha_func: gl::ALWAYS,
+            alpha_ref: 0.0,
+            fog_mode: 0,
+            fog_start: 0.0,
+            fog_end: 1.0,
+            fog_density: 0.0,
+            fog_color: [0.0; 4],
+        }
+    }
+}
+
 
 /// Fragment function seam. Given the shared state and interpolated varyings,
 /// writes the pre-blend BGRA8 color and returns whether the fragment passes

@@ -193,6 +193,7 @@ pub enum Cmd {
         w: u32,
         h: u32,
     },
+    SetFragState(alloc::boxed::Box<vantage_raster::FragState>),
     BindAttachments {
         color: Option<ImageId>,
         depth: Option<ImageId>,
@@ -373,6 +374,7 @@ impl Queue {
         let mut color_target: Option<ImageId> = None;
         let mut depth_target: Option<ImageId> = None;
         let mut stencil_target: Option<ImageId> = None;
+        let mut current_frag_state = vantage_raster::FragState::default();
 
         for op in &cmd.ops {
             match op {
@@ -477,6 +479,9 @@ impl Queue {
                         }
                     }
                 }
+                SetFragState(fs) => {
+                    current_frag_state = (**fs).clone();
+                }
                 Draw { count, first } => {
                     execute_draw(
                         dev,
@@ -490,6 +495,7 @@ impl Queue {
                         color_target,
                         depth_target,
                         stencil_target,
+                        &current_frag_state,
                     );
                 }
                 DrawIndexed { count, first } => {
@@ -505,6 +511,7 @@ impl Queue {
                         color_target,
                         depth_target,
                         stencil_target,
+                        &current_frag_state,
                     );
                 }
             }
@@ -719,6 +726,7 @@ fn execute_draw(
     color_id: Option<ImageId>,
     depth_id: Option<ImageId>,
     stencil_id: Option<ImageId>,
+    frag_state: &vantage_raster::FragState,
 ) {
     let Some(pipe_id) = pipeline_id else {
         return;
@@ -801,24 +809,11 @@ fn execute_draw(
             stencil: s_slice,
         };
 
-        let default_frag_state = FragState {
-            textures: [SampledTexture::disabled(), SampledTexture::disabled()],
-            texenv_mode: [vantage_raster::gl::TEXENV_MODULATE; 2],
-            texenv_color: [[0.0; 4]; 2],
-            alpha_func: vantage_raster::gl::ALWAYS,
-            alpha_ref: 0.0,
-            fog_mode: 0,
-            fog_start: 0.0,
-            fog_end: 1.0,
-            fog_density: 0.0,
-            fog_color: [0.0; 4],
-        };
-
         let mut raster = vantage_raster::PrimitiveRasterizer::new(
             &raster_state,
             targets,
             vantage_raster::reference_frag,
-            &default_frag_state as *const FragState,
+            frag_state as *const FragState,
         );
 
         if let Some((i_buf_id, i_offset, i_type)) = index_info {
