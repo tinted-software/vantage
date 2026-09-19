@@ -10,7 +10,9 @@
 #define EGL_EGLEXT_PROTOTYPES 1
 #include <EGL/egl.h>
 #include <GLES/gl.h>
+#define XUTIL_DEFINE_FUNCTIONS
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

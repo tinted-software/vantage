@@ -5,17 +5,50 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [features]
-default = ["std"]
-std = ["pliron/std", "pliron-llvm/std"]
+default = ["std", "backend-jit"]
+std = ["pliron/std", "vantage-raster/std", "spirv-frontend"]
+# SPIR-V module parsing (host-side tooling; rspirv requires std).
+spirv-frontend = ["dep:rspirv", "dep:spirv"]
+# pliron -> cranelift IR, executed by cranelift-interpreter.
+# NOTE: std is required for now — pliron's own no_std support is broken
+# upstream (unconditional std-defaulting deps: regex/combine/slotmap/...;
+# combine gates its `easy` parser module behind std). The interpreter
+# *code* here stays no_std-clean; flip this back once pliron no_std works.
+backend-interp = [
+    "std",
+    "backend-llvm",
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-interpreter",
+]
+# pliron -> cranelift IR, compiled to native code by cranelift-jit. std only.
+backend-jit = [
+    "std",
+    "backend-llvm",
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-native",
+    "dep:cranelift-jit",
+    "dep:cranelift-module",
+]
+# LLVM backend via pliron-llvm: optional, targeted at real GPU codegen.
+backend-llvm = ["dep:pliron-llvm"]
 
 [dependencies]
 hashbrown.workspace = true
+spin.workspace = true
 libm.workspace = true
 vantage-raster = { path = "../raster", default-features = false }
-pliron = { version = "0.18.0", default-features = false }
-pliron-llvm = { version = "0.18.0", default-features = false, optional = true }
-rspirv = { workspace = true }
-spirv = { workspace = true }
+pliron = { git = "https://github.com/pliron-org/pliron", default-features = false }
+pliron-llvm = { git = "https://github.com/pliron-org/pliron", default-features = false, optional = true }
+rspirv = { workspace = true, optional = true }
+spirv = { workspace = true, optional = true }
+cranelift-codegen = { git = "https://github.com/tinted-software/wasmtime", branch = "push-wvxzqolwxsvk", default-features = false, optional = true }
+cranelift-frontend = { git = "https://github.com/tinted-software/wasmtime", branch = "push-wvxzqolwxsvk", default-features = false, optional = true }
+cranelift-interpreter = { git = "https://github.com/tinted-software/wasmtime", branch = "push-wvxzqolwxsvk", default-features = false, optional = true }
+cranelift-native = { git = "https://github.com/tinted-software/wasmtime", branch = "push-wvxzqolwxsvk", default-features = false, optional = true }
+cranelift-jit = { git = "https://github.com/tinted-software/wasmtime", branch = "push-wvxzqolwxsvk", optional = true }
+cranelift-module = { git = "https://github.com/tinted-software/wasmtime", branch = "push-wvxzqolwxsvk", optional = true }
 
 [dev-dependencies]
 bytemuck.workspace = true

@@ -6,7 +6,6 @@ resolver = "3"
 bytemuck = { version = "1.25.2", default-features = false, features = ["derive"] }
 glam = { version = "0.33.7", default-features = false, features = ["nostd-libm", "all-types"] }
 hashbrown = { version = "0.17.1", default-features = false, features = ["alloc", "default-hasher"] }
-lock_api = "0.4.14"
 libm = { version = "0.2.16", default-features = false }
 rspirv = { git = "https://github.com/gfx-rs/rspirv", default-features = false }
 spin = { version = "0.12.3", default-features = false, features = ["mutex", "spin_mutex", "rwlock", "once", "lazy"] }

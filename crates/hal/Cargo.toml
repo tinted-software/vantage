@@ -5,10 +5,13 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 [features]
 default = ["std"]
-std = []
+# std builds ship the cranelift-jit fragment backend (implied: std, backend-llvm).
+std = ["vantage-shader/backend-jit"]
+# no_std fallback backend for freestanding builds: pliron -> cranelift -> interpreter.
+shader-interp = ["vantage-shader/backend-interp"]
 [dependencies]
 bytemuck.workspace = true
 vantage-raster = { path = "../raster", default-features = false }
-
+vantage-shader = { path = "../shader", default-features = false }
 hashbrown.workspace = true
 smallvec = { version = "1.16.1", default-features = false }

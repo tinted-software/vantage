@@ -638,7 +638,8 @@ impl GlContext {
         }
 
         let (final_vertices, final_indices): (&[VertexData], Option<alloc::borrow::Cow<[u32]>>) =
-            if mode == GL_QUADS {
+            if mode == GL_QUADS && indices.is_none() {
+                // Sequential quad expansion from packed vertex data.
                 let quad_count = vertices.len() / 4;
                 let mut inds = Vec::with_capacity(quad_count * 6);
                 for q in 0..quad_count as u32 {
@@ -651,6 +652,25 @@ impl GlContext {
                     inds.push(base + 3);
                 }
                 (vertices, Some(alloc::borrow::Cow::Owned(inds)))
+            } else if mode == GL_QUADS {
+                // Indexed quads: expand from the actual index values so shared
+                // vertices between quads keep working with compacted gathers.
+                let inds = indices.unwrap_or(&[]);
+                let quad_count = inds.len() / 4;
+                let mut out = Vec::with_capacity(quad_count * 6);
+                for q in 0..quad_count {
+                    let b0 = inds[q * 4];
+                    let b1 = inds[q * 4 + 1];
+                    let b2 = inds[q * 4 + 2];
+                    let b3 = inds[q * 4 + 3];
+                    out.push(b0);
+                    out.push(b1);
+                    out.push(b2);
+                    out.push(b0);
+                    out.push(b2);
+                    out.push(b3);
+                }
+                (vertices, Some(alloc::borrow::Cow::Owned(out)))
             } else if let Some(inds) = indices {
                 (vertices, Some(alloc::borrow::Cow::Borrowed(inds)))
             } else {

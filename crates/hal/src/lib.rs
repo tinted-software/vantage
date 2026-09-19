@@ -104,12 +104,31 @@ pub struct Buffer {
 /// A 2D image. Interleaved planes: color images are one plane; depth/stencil
 /// are separate `D32Sfloat` / `S8Uint` images (Vulkan-style separate depth
 /// and stencil aspects).
+///
+/// `ext` aliases memory owned elsewhere (a mapped DRM GEM buffer backing a
+/// DRI3 presentation slot). When set, `data` is empty and all access goes
+/// through [`Image::slice`] / [`Image::slice_mut`]; the pointed memory must
+/// outlive the image.
 pub struct Image {
     pub format: Format,
     pub width: u32,
     pub height: u32,
+    /// Row pitch in bytes. Equals `width * bpp` for owned images; may exceed
+    /// it for externally-backed images (GEM buffer pitch).
+    pub row_pitch: u32,
     pub data: Vec<u8>,
+    pub ext: Option<ExtMem>,
 }
+
+/// Memory borrowed from outside the device (e.g. a mapped GEM bo).
+pub struct ExtMem {
+    pub ptr: *mut u8,
+    pub len: usize,
+}
+// The borrow is managed by the presentation surface (DRI3 slot ring); the
+// device never frees or moves it. Single-GPU driver target.
+unsafe impl Send for ExtMem {}
+unsafe impl Sync for ExtMem {}
 
 impl Image {
     fn new(format: Format, width: u32, height: u32) -> Self {
@@ -117,7 +136,25 @@ impl Image {
             format,
             width,
             height,
+            row_pitch: width * format.bytes_per_pixel(),
             data: alloc::vec![0u8; (width * height * format.bytes_per_pixel()) as usize],
+            ext: None,
+        }
+    }
+
+    /// Full backing memory as bytes. For external images the buffer includes
+    /// pitch padding; use `row_pitch` for row addressing.
+    pub fn slice(&self) -> &[u8] {
+        match &self.ext {
+            Some(e) => unsafe { core::slice::from_raw_parts(e.ptr, e.len) },
+            None => &self.data,
+        }
+    }
+
+    pub fn slice_mut(&mut self) -> &mut [u8] {
+        match &self.ext {
+            Some(e) => unsafe { core::slice::from_raw_parts_mut(e.ptr, e.len) },
+            None => &mut self.data,
         }
     }
 }
@@ -317,6 +354,51 @@ impl Device {
         id
     }
 
+    /// Create an image aliasing externally-owned memory (a mapped GEM bo
+    /// backing a DRI3 presentation slot). `pitch` is the row stride in bytes
+    /// and may exceed `width * bpp`.
+    ///
+    /// # Safety
+    /// `ptr` must remain valid and immutable-alias-free for the image's
+    /// lifetime; the owner (presentation surface) guarantees that.
+    pub unsafe fn create_image_external(
+        &mut self,
+        format: Format,
+        width: u32,
+        height: u32,
+        ptr: *mut u8,
+        len: usize,
+        pitch: u32,
+    ) -> ImageId {
+        let id = ImageId(self.alloc_id());
+        self.images.insert(
+            id,
+            Image {
+                format,
+                width,
+                height,
+                row_pitch: pitch,
+                data: alloc::vec![],
+                ext: Some(ExtMem { ptr, len }),
+            },
+        );
+        id
+    }
+
+    /// Re-point an external image at new memory (next presentation slot of
+    /// the same geometry). No-op for owned images.
+    ///
+    /// # Safety
+    /// Same contract as [`Device::create_image_external`].
+    pub unsafe fn set_image_external(&mut self, id: ImageId, ptr: *mut u8, len: usize, pitch: u32) {
+        if let Some(im) = self.images.get_mut(&id) {
+            if im.ext.is_some() {
+                im.ext = Some(ExtMem { ptr, len });
+                im.row_pitch = pitch;
+            }
+        }
+    }
+
     pub fn create_pipeline(&mut self, pipeline: Pipeline) -> PipelineId {
         let id = PipelineId(self.alloc_id());
         self.pipelines.insert(id, pipeline);
@@ -408,11 +490,15 @@ impl Queue {
                     };
                     let bpp = im.format.bytes_per_pixel() as usize;
                     let row = im.width as usize * bpp;
-                    for y in 0..(extent.1 as usize).min(im.height as usize) {
+                    let pitch = im.row_pitch as usize;
+                    let rows = (extent.1 as usize).min(im.height as usize);
+                    let mem = im.slice_mut();
+                    for y in 0..rows {
                         let src_off = y * row;
+                        let dst_off = y * pitch;
                         let n = row.min(sb.data.len().saturating_sub(src_off));
-                        if src_off + n <= im.data.len() {
-                            im.data[src_off..src_off + n]
+                        if dst_off + n <= mem.len() {
+                            mem[dst_off..dst_off + n]
                                 .copy_from_slice(&sb.data[src_off..src_off + n]);
                         }
                     }
@@ -425,8 +511,18 @@ impl Queue {
                     let Some(db) = dev.buffers.get_mut(dst) else {
                         continue;
                     };
-                    let n = im.data.len().min(db.data.len());
-                    db.data[..n].copy_from_slice(&im.data[..n]);
+                    let src_mem = im.slice();
+                    // Copy row by row: external images may have padded pitch,
+                    // and readback consumers expect packed rows.
+                    let row = im.width as usize * im.format.bytes_per_pixel() as usize;
+                    let rows = im.height as usize;
+                    for y in 0..rows {
+                        let s = y * im.row_pitch as usize;
+                        let d = y * row;
+                        if d + row <= db.data.len() && s + row <= src_mem.len() {
+                            db.data[d..d + row].copy_from_slice(&src_mem[s..s + row]);
+                        }
+                    }
                 }
                 BindPipeline { pipeline } => bound_pipeline = Some(*pipeline),
                 BindDescriptorSet { set } => bound_descriptors = Some(*set),
@@ -486,7 +582,7 @@ impl Queue {
                     }
                     if mask & 4 != 0 {
                         if let Some(im) = stencil_target.and_then(|id| dev.image_mut(id)) {
-                            im.data.fill(*stencil);
+                            im.slice_mut().fill(*stencil);
                         }
                     }
                 }
@@ -556,11 +652,24 @@ fn clear_color_image(im: &mut Image, color: [f32; 4]) {
         Format::B8G8R8A8Unorm => (color[2], color[1], color[0], color[3]),
         _ => return,
     };
-    for px in im.data.as_chunks_mut::<4>().0 {
-        px[0] = (b0 * 255.0 + 0.5) as u8;
-        px[1] = (b1 * 255.0 + 0.5) as u8;
-        px[2] = (b2 * 255.0 + 0.5) as u8;
-        px[3] = (b3 * 255.0 + 0.5) as u8;
+    let mut row_bytes = [0u8; 4];
+    row_bytes[0] = (b0 * 255.0 + 0.5) as u8;
+    row_bytes[1] = (b1 * 255.0 + 0.5) as u8;
+    row_bytes[2] = (b2 * 255.0 + 0.5) as u8;
+    row_bytes[3] = (b3 * 255.0 + 0.5) as u8;
+    // Row-aware: external images can carry padded pitch.
+    let (pitch, height, width) = (im.row_pitch as usize, im.height as usize, im.width as usize);
+    let mem = im.slice_mut();
+    for y in 0..height {
+        let off = y * pitch;
+        if off + 4 > mem.len() {
+            break;
+        }
+        let end = (off + width * 4).min(mem.len());
+        let row = &mut mem[off..end];
+        for px in row.as_chunks_mut::<4>().0 {
+            *px = row_bytes;
+        }
     }
 }
 
@@ -568,8 +677,20 @@ fn clear_depth_image(im: &mut Image, depth: f32) {
     if im.format != Format::D32Sfloat {
         return;
     }
-    for px in im.data.as_chunks_mut::<4>().0 {
-        px.copy_from_slice(&depth.to_ne_bytes());
+    let mut row_bytes = [0u8; 4];
+    row_bytes.copy_from_slice(&depth.to_ne_bytes());
+    let (pitch, height, width) = (im.row_pitch as usize, im.height as usize, im.width as usize);
+    let mem = im.slice_mut();
+    for y in 0..height {
+        let off = y * pitch;
+        if off + 4 > mem.len() {
+            break;
+        }
+        let end = (off + width * 4).min(mem.len());
+        let row = &mut mem[off..end];
+        for px in row.as_chunks_mut::<4>().0 {
+            *px = row_bytes;
+        }
     }
 }
 
@@ -823,16 +944,16 @@ fn execute_draw(
 
     if let Some(ref mut c_im) = color_img {
         let is_bgra = c_im.format == Format::B8G8R8A8Unorm;
-        let c_stride = c_im.width * 4;
+        let c_stride = c_im.row_pitch as usize;
         let w = c_im.width;
         let h = c_im.height;
 
-        let d_slice = depth_img.as_mut().map(|im| im.data.as_mut_slice());
-        let s_slice = stencil_img.as_mut().map(|im| im.data.as_mut_slice());
+        let d_slice = depth_img.as_mut().map(|im| im.slice_mut());
+        let s_slice = stencil_img.as_mut().map(|im| im.slice_mut());
 
         let targets = Targets {
-            color: c_im.data.as_mut_slice(),
-            color_stride: c_stride,
+            color: c_im.slice_mut(),
+            color_stride: c_stride as u32,
             width: w,
             height: h,
             bgra_order: is_bgra,
@@ -840,10 +961,12 @@ fn execute_draw(
             stencil: s_slice,
         };
 
+        let frag_fn = vantage_shader::fragment_function_for_state(frag_state);
+
         let mut raster = vantage_raster::PrimitiveRasterizer::new(
             &raster_state,
             targets,
-            vantage_raster::reference_frag,
+            frag_fn,
             frag_state as *const FragState,
         );
 
@@ -955,16 +1078,16 @@ fn execute_draw_mesh(
 
     if let Some(ref mut c_im) = color_img {
         let is_bgra = c_im.format == Format::B8G8R8A8Unorm;
-        let c_stride = c_im.width * 4;
+        let c_stride = c_im.row_pitch as usize;
         let w = c_im.width;
         let h = c_im.height;
 
-        let d_slice = depth_img.as_mut().map(|im| im.data.as_mut_slice());
-        let s_slice = stencil_img.as_mut().map(|im| im.data.as_mut_slice());
+        let d_slice = depth_img.as_mut().map(|im| im.slice_mut());
+        let s_slice = stencil_img.as_mut().map(|im| im.slice_mut());
 
         let targets = Targets {
-            color: c_im.data.as_mut_slice(),
-            color_stride: c_stride,
+            color: c_im.slice_mut(),
+            color_stride: c_stride as u32,
             width: w,
             height: h,
             bgra_order: is_bgra,
@@ -972,10 +1095,12 @@ fn execute_draw_mesh(
             stencil: s_slice,
         };
 
+        let frag_fn = vantage_shader::fragment_function_for_state(frag_state);
+
         let mut raster = vantage_raster::PrimitiveRasterizer::new(
             &raster_state,
             targets,
-            vantage_raster::reference_frag,
+            frag_fn,
             frag_state as *const FragState,
         );
 

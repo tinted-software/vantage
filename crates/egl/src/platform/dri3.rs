@@ -485,6 +485,9 @@ pub struct Dri3Surface {
     slots: Vec<Slot>,
     /// Present event id (XID) selected on the window.
     eid: u32,
+    /// Slot the application is currently rendering into via an external
+    /// (zero-copy) image; presented by [`Dri3Surface::present_slot`].
+    pub render_slot: Option<usize>,
 }
 
 unsafe impl Send for Dri3Surface {}
@@ -560,6 +563,7 @@ impl Dri3Surface {
             serial: 0,
             slots,
             eid,
+            render_slot: None,
         })
     }
 
@@ -599,15 +603,23 @@ impl Dri3Surface {
             }
         }
 
+        // Flip. update=None: the server treats it as the full pixmap
+        // extents (hw/xfree86 present_pixmap); options gates vblank wait.
+        if !self.present_pixmap(idx) {
+            return false;
+        }
+        true
+    }
+
+    /// Send `Present:Pixmap` for slot `idx` and mark it busy until the
+    /// server's IdleNotify. Shared by the copy path and the zero-copy path.
+    fn present_pixmap(&mut self, idx: usize) -> bool {
         // Lazily import the bo into X as a pixmap (dma-buf fd transfer).
         if self.slots[idx].pixmap == 0 {
             if !unsafe { self.import_pixmap(idx) } {
                 return false;
             }
         }
-
-        // Flip. update=None: the server treats it as the full pixmap
-        // extents (hw/xfree86 present_pixmap); options gates vblank wait.
         self.serial = self.serial.wrapping_add(1).max(1);
         let serial = self.serial;
         let options = if self.swap_interval == 0 {
@@ -648,6 +660,42 @@ impl Dri3Surface {
         unsafe { (self.c.flush)(self.c.conn) };
         self.slots[idx].busy_serial = Some(serial);
         true
+    }
+
+    /// Zero-copy path, step 1 (called at swap for the *next* frame): pick a
+    /// free GEM slot and hand its mapped memory to the caller so the
+    /// rasterizer can render directly into it. Blocks (draining Present
+    /// events) only when all three slots are still in flight — the same
+    /// throttling the copy path applies.
+    ///
+    /// Returns `(slot, map_ptr, pitch)`. The pointer stays valid until the
+    /// slot is presented or the surface is resized/dropped.
+    pub fn acquire(&mut self) -> Option<(usize, *mut u8, usize)> {
+        if !self.pump_events() {
+            return None;
+        }
+        let idx = match self.free_slot() {
+            Some(i) => i,
+            None => {
+                if !self.pump_wait_for_slot() {
+                    return None;
+                }
+                self.free_slot()?
+            }
+        };
+        self.render_slot = Some(idx);
+        let slot = &mut self.slots[idx];
+        let mem = slot.bo.as_mut_slice();
+        Some((idx, mem.as_mut_ptr(), slot.bo.pitch as usize))
+    }
+
+    /// Zero-copy path, step 2 (called at the following swap): flip the slot
+    /// that was rendered into. No framebuffer copy occurs.
+    pub fn present_slot(&mut self) -> bool {
+        let Some(idx) = self.render_slot.take() else {
+            return false;
+        };
+        self.present_pixmap(idx)
     }
 
     unsafe fn import_pixmap(&mut self, idx: usize) -> bool {
@@ -698,11 +746,18 @@ impl Dri3Surface {
     }
 
     fn free_slot(&mut self) -> Option<usize> {
-        // Prefer already-imported (pixmap cached) slots, then fresh ones.
+        // Prefer already-imported (pixmap cached) slots, then fresh ones. The
+        // slot currently bound as the render target is never handed out.
         self.slots
             .iter()
             .position(|s| s.busy_serial.is_none() && s.pixmap != 0)
-            .or_else(|| self.slots.iter().position(|s| s.busy_serial.is_none()))
+            .filter(|&i| Some(i) != self.render_slot)
+            .or_else(|| {
+                self.slots
+                    .iter()
+                    .position(|s| s.busy_serial.is_none())
+                    .filter(|&i| Some(i) != self.render_slot)
+            })
     }
 
     /// Drain X events, releasing slots the server finished with. Returns
@@ -815,6 +870,7 @@ impl Dri3Surface {
             }
         }
         self.slots.clear();
+        self.render_slot = None;
         let mut slots = Vec::new();
         for _ in 0..3 {
             match self.dev.create_dumb(width, height, 32) {

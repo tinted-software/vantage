@@ -9,12 +9,29 @@
 #![no_std]
 extern crate alloc;
 
-#[cfg(feature = "std")]
-use alloc::sync::Arc;
 use hashbrown::HashMap;
 pub use vantage_raster::{gl, FragFn, FragState, SampledTexture, Varyings};
+pub mod offsets;
+#[cfg(feature = "spirv-frontend")]
 pub mod spirv;
 
+#[cfg(feature = "backend-llvm")]
+pub mod program;
+
+#[cfg(all(
+    feature = "backend-llvm",
+    any(feature = "backend-jit", feature = "backend-interp")
+))]
+pub mod lowering;
+
+#[cfg(all(feature = "backend-llvm", feature = "backend-jit"))]
+pub mod jit;
+
+#[cfg(all(feature = "backend-llvm", feature = "backend-interp"))]
+pub mod interp;
+
+#[cfg(feature = "backend-llvm")]
+pub use program::FragmentIr;
 /// Canonical fragment state key for pipeline caching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FragmentKey {
@@ -44,24 +61,85 @@ impl FragmentKey {
 /// Represents a simple SSA fragment program built with `pliron`.
 pub struct FragmentProgram {
     pub key: FragmentKey,
-    #[cfg(feature = "std")]
-    pub context: Arc<pliron::context::Context>,
+    backend: Backend,
+}
+
+/// Executable form chosen at compile time from the active backend features.
+enum Backend {
+    /// Portable scalar evaluation; always available, used as fallback.
+    Scalar,
+    /// Native machine code produced by cranelift-jit. The owning program
+    /// must outlive the entry pointer (executable lives in its arena).
+    #[cfg(feature = "backend-jit")]
+    Jit {
+        _program: jit::JitFragmentProgram,
+        entry: FragFn,
+    },
+    /// cranelift-interpreter execution of the same lowered function.
+    #[cfg(all(feature = "backend-interp", not(feature = "backend-jit")))]
+    Interp(interp::InterpFragmentProgram),
+}
+
+impl Backend {
+    fn compile(key: &FragmentKey) -> Self {
+        #[cfg(feature = "backend-jit")]
+        {
+            let ir = program::build_fragment_program(key);
+            match jit::JitFragmentProgram::compile(&ir) {
+                Ok(p) => {
+                    return Backend::Jit {
+                        entry: p.as_frag_fn(),
+                        _program: p,
+                    };
+                }
+                Err(e) => panic!("JIT COMPILE FAILED: {e}"),
+            }
+        }
+        #[cfg(not(feature = "backend-jit"))]
+        {
+            #[cfg(feature = "backend-interp")]
+            {
+                let ir = program::build_fragment_program(key);
+                if ir.has_external_calls() {
+                    // Interpreter cannot call host symbols (@vantage_expf).
+                    return Backend::Scalar;
+                }
+                return Backend::Interp(interp::InterpFragmentProgram::compile(&ir));
+            }
+            #[cfg(not(feature = "backend-interp"))]
+            Backend::Scalar
+        }
+    }
 }
 
 impl FragmentProgram {
-    pub fn compile(key: &FragmentKey) -> Self {
-        #[cfg(feature = "std")]
-        let context = {
-            let ctx = pliron::context::Context::default();
-            // Build pliron SSA IR representing the fragment pipeline
-            // MISSING: LLVM tarball JIT backend — lower pliron-llvm to native JIT function pointer
-            Arc::new(ctx)
-        };
+    /// Name of the active execution backend, for diagnostics/tests.
+    pub fn backend_name(&self) -> &'static str {
+        match &self.backend {
+            #[cfg(feature = "backend-jit")]
+            Backend::Jit { .. } => "cranelift-jit",
+            #[cfg(all(feature = "backend-interp", not(feature = "backend-jit")))]
+            Backend::Interp(_) => "cranelift-interp",
+            Backend::Scalar => "scalar",
+        }
+    }
 
+    pub fn compile(key: &FragmentKey) -> Self {
         Self {
             key: *key,
-            #[cfg(feature = "std")]
-            context,
+            backend: Backend::compile(key),
+        }
+    }
+    /// Native entry point for draw-time binding. `None` means this backend
+    /// needs the generic dispatcher (scalar/interpreter).
+    #[inline]
+    fn direct_entry(&self) -> Option<FragFn> {
+        match &self.backend {
+            #[cfg(feature = "backend-jit")]
+            Backend::Jit { entry, .. } => Some(*entry),
+            #[cfg(all(feature = "backend-interp", not(feature = "backend-jit")))]
+            Backend::Interp(_) => None,
+            Backend::Scalar => None,
         }
     }
 
@@ -69,6 +147,22 @@ impl FragmentProgram {
     /// Returns true if alpha test passed, false if discarded.
     #[inline]
     pub unsafe fn evaluate(
+        &self,
+        ctx: *const FragState,
+        varying: *const Varyings,
+        out: *mut [u8; 4],
+    ) -> bool {
+        match &self.backend {
+            #[cfg(feature = "backend-jit")]
+            Backend::Jit { entry, .. } => unsafe { (entry)(ctx, varying, out) },
+            #[cfg(all(feature = "backend-interp", not(feature = "backend-jit")))]
+            Backend::Interp(p) => unsafe { p.evaluate(ctx, varying, out) },
+            Backend::Scalar => unsafe { self.scalar_eval(ctx, varying, out) },
+        }
+    }
+
+    /// Portable scalar evaluation of the fragment pipeline.
+    unsafe fn scalar_eval(
         &self,
         ctx: *const FragState,
         varying: *const Varyings,
@@ -310,20 +404,86 @@ impl ShaderCache {
     }
 }
 
-/// Static entry point dispatching through the reference pipeline logic.
+/// Process-wide pipeline cache. Programs own their executable allocations;
+/// callers may retain a JIT entry pointer after releasing the cache lock.
+static PROGRAM_CACHE: spin::Mutex<Option<ShaderCache>> = spin::Mutex::new(None);
+
+/// Select the fragment routine once per draw. This keeps key construction,
+/// hashing, and the global cache lock out of the per-pixel raster loop.
+pub fn fragment_function_for_state(state: &FragState) -> FragFn {
+    let key = FragmentKey::from_state(state);
+    let mut guard = PROGRAM_CACHE.lock();
+    let prog = guard
+        .get_or_insert_with(ShaderCache::new)
+        .get_or_compile(&key);
+    prog.direct_entry().unwrap_or(fragment_entry_point)
+}
+
+/// Generic fallback dispatcher for scalar/interpreter configurations.
+/// JIT-enabled draw paths use [`fragment_function_for_state`] instead.
 pub unsafe fn fragment_entry_point(
     ctx: *const FragState,
     varying: *const Varyings,
     out: *mut [u8; 4],
 ) -> bool {
-    let key = FragmentKey::from_state(&*ctx);
-    let prog = FragmentProgram::compile(&key);
-    prog.evaluate(ctx, varying, out)
+    let key = FragmentKey::from_state(unsafe { &*ctx });
+    let mut guard = PROGRAM_CACHE.lock();
+    let prog = guard
+        .get_or_insert_with(ShaderCache::new)
+        .get_or_compile(&key);
+    unsafe { prog.evaluate(ctx, varying, out) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "backend-jit")]
+    #[test]
+    fn test_exponential_fog_jit_matches_reference() {
+        // MCPE regression: exponential fog (mode 2) is the only fragment
+        // program that emits a call (@vantage_expf). The external-name
+        // relocation path (ExternalName::TestCase) panicked at runtime with
+        // `not implemented!()` in ModuleReloc::from_mach_reloc; linear-fog
+        // coverage let it ship.
+        let state = FragState {
+            textures: [
+                vantage_raster::SampledTexture::disabled(),
+                vantage_raster::SampledTexture::disabled(),
+            ],
+            texenv_mode: [gl::TEXENV_REPLACE, gl::TEXENV_REPLACE],
+            texenv_color: [[0.0; 4]; 2],
+            alpha_func: gl::ALWAYS,
+            alpha_ref: 0.0,
+            fog_mode: 2,
+            fog_start: 0.0,
+            fog_end: 1.0,
+            fog_density: 0.3,
+            fog_color: [0.5, 0.5, 0.5, 1.0],
+        };
+        let varyings = Varyings {
+            color: [0.3, 0.4, 0.5, 1.0],
+            tex0: [0.0, 0.0],
+            tex1: [0.0, 0.0],
+            fog: 0.7,
+            view_z: 1.0,
+        };
+        let key = FragmentKey::from_state(&state);
+        let prog = FragmentProgram::compile(&key);
+        assert_eq!(prog.backend_name(), "cranelift-jit");
+        let mut out_prog = [0u8; 4];
+        let pass_prog =
+            unsafe { prog.evaluate(&state, &varyings, out_prog.as_mut_ptr() as *mut [u8; 4]) };
+        let mut out_ref = [0u8; 4];
+        let pass_ref = unsafe {
+            vantage_raster::reference_frag(&state, &varyings, out_ref.as_mut_ptr() as *mut [u8; 4])
+        };
+        assert_eq!(pass_prog, pass_ref);
+        assert_eq!(
+            out_prog, out_ref,
+            "expf call must produce native-code result"
+        );
+    }
 
     #[test]
     fn test_pliron_fragment_pipeline_matches_reference() {
@@ -364,6 +524,9 @@ mod tests {
 
         let key = FragmentKey::from_state(&state);
         let prog = FragmentProgram::compile(&key);
+        // The whole point of the pipeline: this must be native code, not the
+        // scalar fallback (a silent jit Err would otherwise keep tests green).
+        assert_eq!(prog.backend_name(), "cranelift-jit");
 
         let mut out_prog = [0u8; 4];
         let pass_prog =

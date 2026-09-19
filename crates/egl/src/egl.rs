@@ -2,7 +2,7 @@
 #![allow(unused_imports, dead_code)]
 use crate::glvnd::{current_native_platform, native_display_ptr, set_platform, NativePlatform};
 #[cfg(all(feature = "std", target_os = "linux"))]
-use crate::platform::x11::x11_shm::X11ShmSurface;
+use crate::platform::x11::X11ShmSurface;
 use alloc::collections::BTreeMap as HashMap;
 use alloc::sync::Arc;
 use core::ffi::{c_void, CStr};
@@ -21,6 +21,14 @@ pub struct EglSurfaceState {
     pub native_window: NativeWindowType,
     pub swap_interval: EGLint,
     pub hal_color_image: Option<vantage_hal::ImageId>,
+    /// Next-frame zero-copy target: HAL image aliasing the acquired DRI3
+    /// GEM slot mapping (dri3 path only).
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    pub hal_ext_color_image: Option<vantage_hal::ImageId>,
+    /// Device-owned fallback color image, presented via copy when the
+    /// zero-copy ring has no slot available.
+    #[cfg(all(feature = "std", target_os = "linux"))]
+    pub hal_fallback_color_image: Option<vantage_hal::ImageId>,
     pub hal_depth_image: Option<vantage_hal::ImageId>,
     #[cfg(all(feature = "std", target_os = "linux"))]
     pub x11_surface: Option<X11ShmSurface>,
@@ -390,7 +398,7 @@ pub unsafe fn egl_create_window_surface(
 
     #[cfg(all(feature = "std", target_os = "linux"))]
     let x11_surface = if win != 0 && dri3_surface.is_none() {
-        let dpy_ptr = native_display_ptr() as *mut crate::platform::x11::x11_shm::Display;
+        let dpy_ptr = native_display_ptr() as *mut crate::platform::x11::Display;
         match unsafe { X11ShmSurface::new(dpy_ptr, win as u64, width, height) } {
             Ok(s) => Some(s),
             Err(_) => {
@@ -409,6 +417,10 @@ pub unsafe fn egl_create_window_surface(
         native_window: win,
         swap_interval: 0,
         hal_color_image: None,
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        hal_ext_color_image: None,
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        hal_fallback_color_image: None,
         hal_depth_image: None,
         #[cfg(all(feature = "std", target_os = "linux"))]
         x11_surface,
@@ -457,7 +469,7 @@ pub unsafe fn egl_create_native_window_surface(
 
     #[cfg(all(feature = "std", any(target_os = "linux", target_os = "freebsd")))]
     let x11_surface = if n.kind == ANGLE_WGPU_NATIVE_X11 && dri3_surface.is_none() {
-        let dpy_ptr = n.display as *mut crate::platform::x11::x11_shm::Display;
+        let dpy_ptr = n.display as *mut crate::platform::x11::Display;
         match unsafe { X11ShmSurface::new(dpy_ptr, n.window, width, height) } {
             Ok(s) => Some(s),
             Err(_) => {
@@ -487,6 +499,10 @@ pub unsafe fn egl_create_native_window_surface(
         native_window: n.window as NativeWindowType,
         swap_interval: 0,
         hal_color_image: None,
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        hal_ext_color_image: None,
+        #[cfg(all(feature = "std", target_os = "linux"))]
+        hal_fallback_color_image: None,
         hal_depth_image: None,
         #[cfg(all(feature = "std", target_os = "linux"))]
         x11_surface,
@@ -626,6 +642,10 @@ pub unsafe fn egl_make_current(
                     .hal_device
                     .create_image(vantage_hal::Format::D32Sfloat, w, h);
                 surf.hal_color_image = Some(c_img);
+                #[cfg(all(feature = "std", target_os = "linux"))]
+                {
+                    surf.hal_fallback_color_image = Some(c_img);
+                }
                 surf.hal_depth_image = Some(d_img);
             }
             let c_img = surf.hal_color_image;
@@ -725,25 +745,86 @@ pub unsafe fn egl_swap_buffers(_dpy: EGLDisplay, surface: EGLSurface) -> EGLBool
 
         #[cfg(all(feature = "std", target_os = "linux"))]
         {
-            let mut surf = surf_arc.lock();
-            let c_id_opt = surf.hal_color_image;
-            let interval = surf.swap_interval;
-            if let Some(ref mut dri3) = surf.dri3_surface {
-                if let Some(c_id) = c_id_opt {
-                    if let Some(img) = ctx.hal_device.image(c_id) {
-                        let stride = (img.width * 4) as usize;
-                        dri3.swap_interval = interval;
-                        if !dri3.present(&img.data, stride) {
-                            set_egl_error(EGL_BAD_ACCESS);
-                            return EGL_FALSE;
+            let mut surf_guard = surf_arc.lock();
+            let s = &mut *surf_guard;
+            let interval = s.swap_interval;
+            let width = s.width;
+            let height = s.height;
+            let fallback_cid = s.hal_fallback_color_image.or(s.hal_color_image);
+            let mut ext_cid = s.hal_ext_color_image;
+            let depth_cid = s.hal_depth_image;
+            if let Some(ref mut dri3) = s.dri3_surface {
+                dri3.swap_interval = interval;
+                // 1. Present the frame just rendered. Zero-copy if a GEM
+                // slot was bound as the render target; fallback copy otherwise.
+                let ok = if dri3.render_slot.is_some() {
+                    dri3.present_slot()
+                } else if let Some(c_id) = fallback_cid {
+                    match ctx.hal_device.image(c_id) {
+                        Some(img) => {
+                            let stride = img.row_pitch as usize;
+                            let data = img.slice();
+                            dri3.present(data, stride)
                         }
+                        None => true,
                     }
+                } else {
+                    true
+                };
+                if !ok {
+                    set_egl_error(EGL_BAD_ACCESS);
+                    return EGL_FALSE;
                 }
-            } else if let Some(ref mut x11) = surf.x11_surface {
+
+                // 2. Pre-acquire next frame's GEM slot: render directly
+                // into it so next swap requires zero framebuffer copy.
+                if let Some((_slot, ptr, pitch)) = dri3.acquire() {
+                    let ext_id = match ext_cid {
+                        Some(id) => id,
+                        None => {
+                            let id = unsafe {
+                                ctx.hal_device.create_image_external(
+                                    vantage_hal::Format::B8G8R8A8Unorm,
+                                    width,
+                                    height,
+                                    ptr,
+                                    pitch * height as usize,
+                                    pitch as u32,
+                                )
+                            };
+                            ext_cid = Some(id);
+                            id
+                        }
+                    };
+                    unsafe {
+                        ctx.hal_device.set_image_external(
+                            ext_id,
+                            ptr,
+                            pitch * height as usize,
+                            pitch as u32,
+                        );
+                    }
+                    s.hal_color_image = Some(ext_id);
+                    s.hal_ext_color_image = Some(ext_id);
+                    ctx.command_buffer.push(vantage_hal::Cmd::BindAttachments {
+                        color: Some(ext_id),
+                        depth: depth_cid,
+                        stencil: None,
+                    });
+                } else {
+                    s.hal_color_image = s.hal_fallback_color_image;
+                    ctx.command_buffer.push(vantage_hal::Cmd::BindAttachments {
+                        color: s.hal_fallback_color_image,
+                        depth: depth_cid,
+                        stencil: None,
+                    });
+                }
+            } else if let Some(ref mut x11) = s.x11_surface {
+                let c_id_opt = fallback_cid;
                 if let Some(c_id) = c_id_opt {
                     if let Some(img) = ctx.hal_device.image(c_id) {
                         unsafe {
-                            x11.present(&img.data, (img.width * 4) as usize);
+                            x11.present(img.slice(), img.row_pitch as usize);
                         }
                     }
                 }
@@ -767,6 +848,11 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
             s.width = w;
             s.height = h;
             s.hal_color_image = None;
+            #[cfg(all(feature = "std", target_os = "linux"))]
+            {
+                s.hal_ext_color_image = None;
+                s.hal_fallback_color_image = None;
+            }
             s.hal_depth_image = None;
 
             #[cfg(all(feature = "std", target_os = "linux"))]
@@ -808,6 +894,10 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
                     .hal_device
                     .create_image(vantage_hal::Format::D32Sfloat, w, h);
                 surf.hal_color_image = Some(c_img);
+                #[cfg(all(feature = "std", target_os = "linux"))]
+                {
+                    surf.hal_fallback_color_image = Some(c_img);
+                }
                 surf.hal_depth_image = Some(d_img);
             }
             let c_img = surf.hal_color_image;

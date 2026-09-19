@@ -364,7 +364,11 @@ pub unsafe extern "C" fn glDrawElements(
 
         let num_indices = count as usize;
         let mut idx_vec = Vec::with_capacity(num_indices);
-        let mut max_index = 0usize;
+        // Compact gather: transform each referenced vertex exactly once and
+        // remap indices, instead of reading the whole 0..=max_index span
+        // (MCPE index buffers routinely reference a sparse subset).
+        let mut remap: Vec<u32> = Vec::new();
+        let mut vertices: Vec<VertexData> = Vec::new();
         for i in 0..num_indices {
             let idx = match type_ {
                 GL_UNSIGNED_BYTE => *idx_base.add(i) as u32,
@@ -372,14 +376,19 @@ pub unsafe extern "C" fn glDrawElements(
                 GL_UNSIGNED_INT => *(idx_base.add(i * 4) as *const u32),
                 _ => *(idx_base.add(i * 2) as *const u16) as u32,
             };
-            max_index = max_index.max(idx as usize);
-            idx_vec.push(idx);
-        }
-
-        let vertex_count = max_index + 1;
-        let mut vertices = Vec::with_capacity(vertex_count);
-        for i in 0..vertex_count {
-            vertices.push(ctx.read_vertex(i));
+            let slot = {
+                let needed = idx as usize + 1;
+                if remap.len() < needed {
+                    remap.resize(needed, u32::MAX);
+                }
+                let r = &mut remap[idx as usize];
+                if *r == u32::MAX {
+                    *r = vertices.len() as u32;
+                    vertices.push(ctx.read_vertex(idx as usize));
+                }
+                *r
+            };
+            idx_vec.push(slot);
         }
 
         ctx.draw_vertex_data(mode, &vertices, Some(&idx_vec));

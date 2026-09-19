@@ -132,6 +132,10 @@ pub struct Varyings {
 }
 
 /// One sampled texture as seen by fragment code.
+///
+/// `repr(C)`: compiled fragment programs (pliron -> cranelift) dereference
+/// these structs at fixed offsets; the layout is an ABI.
+#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct SampledTexture {
     /// RGBA8 texel data (level 0), already converted by the GLES layer.
@@ -167,6 +171,9 @@ impl SampledTexture {
 }
 
 /// Per-pixel fragment context: textures, texenv, fog, alpha ref.
+///
+/// `repr(C)` — see `SampledTexture`; offsets are read by JIT'd code.
+#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct FragState {
     /// Texture units 0..2 (GLES1 CM exposure in this driver).
@@ -605,6 +612,24 @@ pub unsafe fn reference_frag(
 // Rasterizer core & Per-Fragment Pipeline
 // ============================================================================
 
+/// Near-plane clip predicates for [`PrimitiveRasterizer::draw_triangle`].
+enum Plane {
+    /// w - EPS >= 0
+    W(f32),
+    /// z + w >= 0
+    Near,
+}
+
+impl Plane {
+    #[inline]
+    fn eval(&self, v: &Vertex) -> f32 {
+        match *self {
+            Plane::W(eps) => v.pos[3] - eps,
+            Plane::Near => v.pos[2] + v.pos[3],
+        }
+    }
+}
+
 pub struct PrimitiveRasterizer<'a> {
     pub state: &'a RasterState,
     pub targets: Targets<'a>,
@@ -731,7 +756,14 @@ impl<'a> PrimitiveRasterizer<'a> {
     }
 
     #[inline(always)]
-    pub fn shade_and_blend_pixel(&mut self, px: i32, py: i32, z: f32, varying: &Varyings) {
+    pub fn shade_and_blend_pixel(
+        &mut self,
+        px: i32,
+        py: i32,
+        z: f32,
+        varying: &Varyings,
+        depth_pretested: bool,
+    ) {
         let pixel_idx = (py as usize) * (self.targets.width as usize) + (px as usize);
 
         // 1. Fragment Function (color, texenv, fog, alpha-test)
@@ -766,8 +798,9 @@ impl<'a> PrimitiveRasterizer<'a> {
             }
         }
 
-        // 3. Depth Test
-        if self.state.depth_test {
+        // 3. Depth Test. Triangle rasterization may already have performed
+        // this before shading; points/lines and stencil paths still test here.
+        if self.state.depth_test && !depth_pretested {
             if let Some(ref depth) = self.targets.depth {
                 let off = pixel_idx * 4;
                 let fb_z = f32::from_ne_bytes([
@@ -948,40 +981,50 @@ impl<'a> PrimitiveRasterizer<'a> {
         // instead of being discarded wholesale; a wholly-behind triangle is
         // dropped, matching GL clip behavior.
         let EPS: f32 = 1e-5;
-        let mut poly: alloc::vec::Vec<Vertex> = alloc::vec![*v0, *v1, *v2];
+        // Common path: fully visible triangles need no clipping. Scene
+        // geometry normally takes this path; it must stay allocation-free.
+        let inside = |v: &Vertex| v.pos[3] >= EPS && v.pos[2] + v.pos[3] >= 0.0;
+        if inside(v0) && inside(v1) && inside(v2) {
+            self.draw_clipped_triangle(v0, v1, v2);
+            return;
+        }
+
         // (w > 0) and (z + w >= 0, the near plane). Both clip in homogeneous
-        // space before any perspective divide.
-        let mut planes: alloc::vec::Vec<alloc::boxed::Box<dyn Fn(&Vertex) -> f32>> =
-            alloc::vec::Vec::new();
-        planes.push(alloc::boxed::Box::new(move |v: &Vertex| v.pos[3] - EPS));
-        planes.push(alloc::boxed::Box::new(|v: &Vertex| v.pos[2] + v.pos[3]));
-        for plane in &planes {
-            if poly.iter().all(|v| plane(v) >= 0.0) {
-                continue;
-            }
-            let src = &poly;
-            let mut out: alloc::vec::Vec<Vertex> = alloc::vec::Vec::new();
-            let n = src.len();
-            for i in 0..n {
+        // space before any perspective divide. Stack-resident Sutherland-
+        // Hodgman: two planes can grow a triangle to at most a pentagon; 8
+        // slots are a safe bound.
+        let mut src: [Vertex; 8] = [*v0; 8];
+        src[1] = *v1;
+        src[2] = *v2;
+        let mut src_len = 3usize;
+        // Clip against each plane with a monomorphic inline pass (no boxed
+        // closures, no heap).
+        for plane in [Plane::W(EPS), Plane::Near] {
+            let mut out: [Vertex; 8] = [src[0]; 8];
+            let mut out_len = 0usize;
+            for i in 0..src_len {
                 let a = &src[i];
-                let b = &src[(i + 1) % n];
-                let da = plane(a);
-                let db = plane(b);
+                let b = &src[(i + 1) % src_len];
+                let da = plane.eval(a);
+                let db = plane.eval(b);
                 if da >= 0.0 {
-                    out.push(*a);
+                    out[out_len] = *a;
+                    out_len += 1;
                 }
                 if (da >= 0.0) != (db >= 0.0) {
                     let t = da / (da - db);
-                    out.push(lerp_vertex(a, b, t));
+                    out[out_len] = lerp_vertex(a, b, t);
+                    out_len += 1;
                 }
             }
-            if out.len() < 3 {
+            if out_len < 3 {
                 return;
             }
-            poly = out;
+            src = out;
+            src_len = out_len;
         }
-        for i in 1..poly.len() - 1 {
-            self.draw_clipped_triangle(&poly[0], &poly[i], &poly[i + 1]);
+        for i in 1..src_len - 1 {
+            self.draw_clipped_triangle(&src[0], &src[i], &src[i + 1]);
         }
     }
 
@@ -1149,22 +1192,23 @@ impl<'a> PrimitiveRasterizer<'a> {
                 let inside = (w0_edge | w1_edge | w2_edge) >= 0;
                 if inside {
                     entered = true;
-                    // Early-Z test when alpha testing is disabled
                     let mut skip_frag = false;
                     let pixel_idx = (py as usize) * (self.targets.width as usize) + (px as usize);
+                    let depth_pretested = self.state.depth_test
+                        && !self.state.stencil_test
+                        && self.targets.depth.is_some();
 
-                    if self.state.depth_test && !self.state.stencil_test {
-                        if let Some(ref depth) = self.targets.depth {
-                            let off = pixel_idx * 4;
-                            let fb_z = f32::from_ne_bytes([
-                                depth[off],
-                                depth[off + 1],
-                                depth[off + 2],
-                                depth[off + 3],
-                            ]);
-                            if !depth_pass(self.state.depth_func, z, fb_z) {
-                                skip_frag = true;
-                            }
+                    if depth_pretested {
+                        let depth = self.targets.depth.as_ref().unwrap();
+                        let off = pixel_idx * 4;
+                        let fb_z = f32::from_ne_bytes([
+                            depth[off],
+                            depth[off + 1],
+                            depth[off + 2],
+                            depth[off + 3],
+                        ]);
+                        if !depth_pass(self.state.depth_func, z, fb_z) {
+                            skip_frag = true;
                         }
                     }
 
@@ -1187,7 +1231,7 @@ impl<'a> PrimitiveRasterizer<'a> {
                                 view_z: cfog * inv_w,
                             }
                         };
-                        self.shade_and_blend_pixel(px, py, z, &varying);
+                        self.shade_and_blend_pixel(px, py, z, &varying, depth_pretested);
                     }
                 } else if entered {
                     // Convex triangle property: once we exit on a scanline, we never re-enter!
@@ -1249,7 +1293,7 @@ impl<'a> PrimitiveRasterizer<'a> {
             for px in min_x..=max_x {
                 let dx = px as f32 + 0.5 - p[0];
                 if dx * dx + dy * dy <= r2 {
-                    self.shade_and_blend_pixel(px, py, p[2], &varying);
+                    self.shade_and_blend_pixel(px, py, p[2], &varying, false);
                 }
             }
         }
@@ -1298,7 +1342,7 @@ impl<'a> PrimitiveRasterizer<'a> {
                 view_z: z,
             };
 
-            self.shade_and_blend_pixel(x0, y0, z, &varying);
+            self.shade_and_blend_pixel(x0, y0, z, &varying, false);
 
             if x0 == x1 && y0 == y1 {
                 break;
