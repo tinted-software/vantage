@@ -177,7 +177,8 @@ unsafe extern "C" fn vendor_get_proc_address(proc_name: *const c_char) -> *mut c
     let Ok(name) = CStr::from_ptr(proc_name).to_str() else {
         return core::ptr::null_mut();
     };
-    let ptr = match name {
+
+    match name {
         "eglInitialize" => egl::egl_initialize as *mut c_void,
         "eglTerminate" => egl::egl_terminate as *mut c_void,
         "eglChooseConfig" => egl::egl_choose_config as *mut c_void,
@@ -211,13 +212,10 @@ unsafe extern "C" fn vendor_get_proc_address(proc_name: *const c_char) -> *mut c
         "eglGetCurrentSurface" => egl::egl_get_current_surface as *mut c_void,
         "eglGetDisplay" => egl::egl_get_display as *mut c_void,
         "eglGetProcAddress" => egl::egl_get_proc_address as *mut c_void,
-        _ => {
-            return crate::get_gl_proc_address(name)
-                .map(|f| f as *mut c_void)
-                .unwrap_or(core::ptr::null_mut())
-        }
-    };
-    ptr
+        _ => crate::get_gl_proc_address(name)
+            .map(|f| f as *mut c_void)
+            .unwrap_or(core::ptr::null_mut()),
+    }
 }
 
 // ---------------------------------------------------------------------------

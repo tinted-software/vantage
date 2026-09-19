@@ -46,7 +46,7 @@ impl From<rspirv::binary::ParseState> for SpirvError {
 impl SpirvModule {
     /// Parse SPIR-V binary from bytes (must be multiple of 4 bytes).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SpirvError> {
-        if bytes.is_empty() || bytes.len() % 4 != 0 {
+        if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
             return Err(SpirvError::InvalidData);
         }
         let module = rspirv::dr::load_bytes(bytes)?;

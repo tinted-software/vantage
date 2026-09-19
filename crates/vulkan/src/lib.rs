@@ -785,7 +785,7 @@ pub unsafe extern "C" fn vkCreateShaderModule(
 
     let dev = &mut *(device as *mut Device);
     let info = &*pCreateInfo;
-    if info.codeSize == 0 || info.codeSize % 4 != 0 || info.pCode.is_null() {
+    if info.codeSize == 0 || !info.codeSize.is_multiple_of(4) || info.pCode.is_null() {
         return VkResult::VK_ERROR_INITIALIZATION_FAILED;
     }
     let byte_slice = core::slice::from_raw_parts(info.pCode as *const u8, info.codeSize);

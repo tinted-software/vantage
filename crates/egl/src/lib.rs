@@ -15,7 +15,7 @@ pub mod platform;
 pub use crate::egl::*;
 pub use vantage_gles::types::*;
 
-use core::ffi::{c_char, c_void};
+use core::ffi::c_char;
 pub use vantage_gles::*;
 
 /// Freestanding support (no `std`): the cdylib still needs a panic handler

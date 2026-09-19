@@ -7,17 +7,12 @@
 
 use alloc::vec::Vec;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum MatrixMode {
+    #[default]
     ModelView = 0,
     Projection = 1,
     Texture = 2,
-}
-
-impl Default for MatrixMode {
-    fn default() -> Self {
-        Self::ModelView
-    }
 }
 
 /// 4x4 float matrix stored in OpenGL column-major order.

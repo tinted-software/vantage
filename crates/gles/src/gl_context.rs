@@ -643,10 +643,10 @@ impl GlContext {
                 let mut inds = Vec::with_capacity(quad_count * 6);
                 for q in 0..quad_count as u32 {
                     let base = q * 4;
-                    inds.push(base + 0);
+                    inds.push(base);
                     inds.push(base + 1);
                     inds.push(base + 2);
-                    inds.push(base + 0);
+                    inds.push(base);
                     inds.push(base + 2);
                     inds.push(base + 3);
                 }

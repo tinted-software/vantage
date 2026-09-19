@@ -10,7 +10,6 @@
 extern crate alloc;
 
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 use hashbrown::HashMap;
 pub use vantage_raster::{gl, FragFn, FragState, SampledTexture, Varyings};
 pub mod spirv;
@@ -208,7 +207,7 @@ fn apply_fog_eval(state: &FragState, color: &mut [f32; 4], fog: f32) {
 #[inline(always)]
 fn wrap_c(x: f32, mode: u32) -> f32 {
     if mode == gl::REPEAT {
-        if x >= 0.0 && x < 1.0 {
+        if (0.0..1.0).contains(&x) {
             x
         } else {
             let i = x as i32;
@@ -222,7 +221,7 @@ fn wrap_c(x: f32, mode: u32) -> f32 {
     } else if mode == gl::CLAMP_TO_EDGE {
         clamp_unit(x)
     } else {
-        let f = if x >= 0.0 && x < 1.0 {
+        let f = if (0.0..1.0).contains(&x) {
             x
         } else {
             x - libm::floorf(x)

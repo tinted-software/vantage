@@ -378,7 +378,7 @@ pub unsafe fn egl_create_window_surface(
     };
 
     #[cfg(all(feature = "std", target_os = "linux"))]
-    let x11_surface = if (win as usize) != 0 {
+    let x11_surface = if win != 0 {
         let dpy_ptr = native_display_ptr() as *mut crate::platform::x11::x11_shm::Display;
         match unsafe { X11ShmSurface::new(dpy_ptr, win as u64, width, height) } {
             Ok(s) => Some(s),

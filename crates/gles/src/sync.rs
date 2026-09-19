@@ -68,6 +68,12 @@ pub struct RawSpinRwLock {
 const WRITER_BIT: u32 = 1 << 31;
 const READER_MASK: u32 = !WRITER_BIT;
 
+impl Default for RawSpinRwLock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RawSpinRwLock {
     pub const fn new() -> Self {
         Self {

@@ -185,9 +185,9 @@ pub fn convert_to_rgba8(
                 let src_idx = i * 4;
                 let dst_idx = i * 4;
                 if src_idx + 3 < data.len() {
-                    out[dst_idx + 0] = data[src_idx + 2]; // R
+                    out[dst_idx] = data[src_idx + 2]; // R
                     out[dst_idx + 1] = data[src_idx + 1]; // G
-                    out[dst_idx + 2] = data[src_idx + 0]; // B
+                    out[dst_idx + 2] = data[src_idx]; // B
                     out[dst_idx + 3] = data[src_idx + 3]; // A
                 }
             }
@@ -197,7 +197,7 @@ pub fn convert_to_rgba8(
                 let src_idx = i * 3;
                 let dst_idx = i * 4;
                 if src_idx + 2 < data.len() {
-                    out[dst_idx + 0] = data[src_idx + 0];
+                    out[dst_idx] = data[src_idx];
                     out[dst_idx + 1] = data[src_idx + 1];
                     out[dst_idx + 2] = data[src_idx + 2];
                     out[dst_idx + 3] = 255;
@@ -208,7 +208,7 @@ pub fn convert_to_rgba8(
             for i in 0..num_pixels {
                 let dst_idx = i * 4;
                 if i < data.len() {
-                    out[dst_idx + 0] = 255;
+                    out[dst_idx] = 255;
                     out[dst_idx + 1] = 255;
                     out[dst_idx + 2] = 255;
                     out[dst_idx + 3] = data[i];
@@ -220,7 +220,7 @@ pub fn convert_to_rgba8(
                 let dst_idx = i * 4;
                 if i < data.len() {
                     let l = data[i];
-                    out[dst_idx + 0] = l;
+                    out[dst_idx] = l;
                     out[dst_idx + 1] = l;
                     out[dst_idx + 2] = l;
                     out[dst_idx + 3] = 255;
@@ -232,9 +232,9 @@ pub fn convert_to_rgba8(
                 let src_idx = i * 2;
                 let dst_idx = i * 4;
                 if src_idx + 1 < data.len() {
-                    let l = data[src_idx + 0];
+                    let l = data[src_idx];
                     let a = data[src_idx + 1];
-                    out[dst_idx + 0] = l;
+                    out[dst_idx] = l;
                     out[dst_idx + 1] = l;
                     out[dst_idx + 2] = l;
                     out[dst_idx + 3] = a;

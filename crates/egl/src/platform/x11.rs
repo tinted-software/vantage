@@ -3,8 +3,7 @@
 
 #[cfg(all(feature = "std", target_os = "linux"))]
 pub mod x11_shm {
-    use core::ffi::{c_char, c_int, c_long, c_uchar, c_uint, c_ulong, c_void};
-    use core::ptr::NonNull;
+    use core::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
 
     pub type Display = c_void;
     pub type Window = c_ulong;

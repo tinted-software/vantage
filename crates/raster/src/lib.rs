@@ -11,9 +11,6 @@
 #![no_std]
 extern crate alloc;
 
-use alloc::vec::Vec;
-use core::ffi::c_void;
-
 // ============================================================================
 // GL enum values (fixed by the spec; duplicated here so raster never
 // depends on the GLES crate).
@@ -370,7 +367,7 @@ fn clamp01(x: f32) -> f32 {
 #[inline(always)]
 fn wrap_coord(x: f32, mode: u32) -> f32 {
     if mode == gl::REPEAT {
-        if x >= 0.0 && x < 1.0 {
+        if (0.0..1.0).contains(&x) {
             x
         } else {
             let i = x as i32;
@@ -384,7 +381,7 @@ fn wrap_coord(x: f32, mode: u32) -> f32 {
     } else if mode == gl::CLAMP_TO_EDGE {
         clamp01(x)
     } else {
-        let f = if x >= 0.0 && x < 1.0 {
+        let f = if (0.0..1.0).contains(&x) {
             x
         } else {
             x - libm::floorf(x)
@@ -735,7 +732,7 @@ impl<'a> PrimitiveRasterizer<'a> {
 
         // 1. Fragment Function (color, texenv, fog, alpha-test)
         let mut frag_color = [0u8; 4]; // BGRA8
-        let alpha_pass = if (self.frag_fn as *const () == reference_frag as *const ()) {
+        let alpha_pass = if self.frag_fn as *const () == reference_frag as *const () {
             reference_frag(
                 self.frag_ctx,
                 varying,
@@ -1060,7 +1057,7 @@ impl<'a> PrimitiveRasterizer<'a> {
         } else {
             (-1i64, -area)
         };
-        let inv_area = 1.0 / (a_val as f32);
+        let _inv_area = 1.0 / (a_val as f32);
 
         let a01 = -(y2 - y1) * 16 * sign;
         let b01 = (x2 - x1) * 16 * sign;
@@ -1073,7 +1070,7 @@ impl<'a> PrimitiveRasterizer<'a> {
 
         // Plane equations for attribute interpolation:
         // For attribute Q: dQ/dx and dQ/dy
-        let float_det = ((p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]));
+        let float_det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]);
         if float_det.abs() < 1e-12 {
             return;
         }
@@ -1228,10 +1225,10 @@ impl<'a> PrimitiveRasterizer<'a> {
         let radius = (self.state.point_size * 0.5).max(0.5);
         let r2 = radius * radius;
 
-        let min_x = libm::floorf((p[0] - radius)) as i32;
-        let max_x = libm::ceilf((p[0] + radius)) as i32;
-        let min_y = libm::floorf((p[1] - radius)) as i32;
-        let max_y = libm::ceilf((p[1] + radius)) as i32;
+        let min_x = libm::floorf(p[0] - radius) as i32;
+        let max_x = libm::ceilf(p[0] + radius) as i32;
+        let min_y = libm::floorf(p[1] - radius) as i32;
+        let max_y = libm::ceilf(p[1] + radius) as i32;
 
         let varying = Varyings {
             color: v.color,

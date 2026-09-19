@@ -399,7 +399,7 @@ impl Queue {
                 CopyBufferToImage { src, dst, extent } => {
                     // src (buffer) and dst (image) live in different maps, but
                     // take-and-reinsert keeps the borrow checker convinced.
-                    let Some(mut sb) = dev.buffers.remove(src) else {
+                    let Some(sb) = dev.buffers.remove(src) else {
                         continue;
                     };
                     let Some(im) = dev.images.get_mut(dst) else {
@@ -556,7 +556,7 @@ fn clear_color_image(im: &mut Image, color: [f32; 4]) {
         Format::B8G8R8A8Unorm => (color[2], color[1], color[0], color[3]),
         _ => return,
     };
-    for px in im.data.chunks_exact_mut(4) {
+    for px in im.data.as_chunks_mut::<4>().0 {
         px[0] = (b0 * 255.0 + 0.5) as u8;
         px[1] = (b1 * 255.0 + 0.5) as u8;
         px[2] = (b2 * 255.0 + 0.5) as u8;
@@ -568,7 +568,7 @@ fn clear_depth_image(im: &mut Image, depth: f32) {
     if im.format != Format::D32Sfloat {
         return;
     }
-    for px in im.data.chunks_exact_mut(4) {
+    for px in im.data.as_chunks_mut::<4>().0 {
         px.copy_from_slice(&depth.to_ne_bytes());
     }
 }
@@ -770,7 +770,7 @@ fn execute_draw(
     };
 
     // Get vertex buffer data
-    let Some((v_buf_id, v_offset)) = vertex_buffers.get(0).cloned() else {
+    let Some((v_buf_id, v_offset)) = vertex_buffers.first().cloned() else {
         return;
     };
     let Some(v_buf) = dev.buffer(v_buf_id) else {
