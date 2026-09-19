@@ -840,10 +840,12 @@ fn execute_draw(
             stencil: s_slice,
         };
 
+        let frag_fn: vantage_raster::FragFn = vantage_shader::fragment_entry_point;
+
         let mut raster = vantage_raster::PrimitiveRasterizer::new(
             &raster_state,
             targets,
-            vantage_raster::reference_frag,
+            frag_fn,
             frag_state as *const FragState,
         );
 
@@ -972,10 +974,12 @@ fn execute_draw_mesh(
             stencil: s_slice,
         };
 
+        let frag_fn: vantage_raster::FragFn = vantage_shader::fragment_entry_point;
+
         let mut raster = vantage_raster::PrimitiveRasterizer::new(
             &raster_state,
             targets,
-            vantage_raster::reference_frag,
+            frag_fn,
             frag_state as *const FragState,
         );
 

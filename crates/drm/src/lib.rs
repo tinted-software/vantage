@@ -25,7 +25,7 @@ use core::ffi::{c_char, c_int, c_ulong, c_void};
 // ============================================================================
 
 extern "C" {
-    fn open(path: *const c_char, flags: c_int, mode: c_int) -> c_int;
+    fn open(path: *const c_char, flags: c_int, ...) -> c_int;
     fn close(fd: c_int) -> c_int;
     fn readlink(path: *const c_char, buf: *mut c_char, bufsiz: usize) -> isize;
     fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -> c_int;

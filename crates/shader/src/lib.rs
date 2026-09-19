@@ -13,8 +13,26 @@ extern crate alloc;
 use alloc::sync::Arc;
 use hashbrown::HashMap;
 pub use vantage_raster::{gl, FragFn, FragState, SampledTexture, Varyings};
+pub mod offsets;
 pub mod spirv;
 
+#[cfg(feature = "backend-llvm")]
+pub mod program;
+
+#[cfg(all(
+    feature = "backend-llvm",
+    any(feature = "backend-jit", feature = "backend-interp")
+))]
+pub mod lowering;
+
+#[cfg(all(feature = "backend-llvm", feature = "backend-jit"))]
+pub mod jit;
+
+#[cfg(all(feature = "backend-llvm", feature = "backend-interp"))]
+pub mod interp;
+
+#[cfg(feature = "backend-llvm")]
+pub use program::FragmentIr;
 /// Canonical fragment state key for pipeline caching.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FragmentKey {

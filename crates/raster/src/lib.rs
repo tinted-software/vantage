@@ -132,6 +132,10 @@ pub struct Varyings {
 }
 
 /// One sampled texture as seen by fragment code.
+///
+/// `repr(C)`: compiled fragment programs (pliron -> cranelift) dereference
+/// these structs at fixed offsets; the layout is an ABI.
+#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct SampledTexture {
     /// RGBA8 texel data (level 0), already converted by the GLES layer.
@@ -167,6 +171,9 @@ impl SampledTexture {
 }
 
 /// Per-pixel fragment context: textures, texenv, fog, alpha ref.
+///
+/// `repr(C)` — see `SampledTexture`; offsets are read by JIT'd code.
+#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct FragState {
     /// Texture units 0..2 (GLES1 CM exposure in this driver).

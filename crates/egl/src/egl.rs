@@ -2,7 +2,7 @@
 #![allow(unused_imports, dead_code)]
 use crate::glvnd::{current_native_platform, native_display_ptr, set_platform, NativePlatform};
 #[cfg(all(feature = "std", target_os = "linux"))]
-use crate::platform::x11::x11_shm::X11ShmSurface;
+use crate::platform::x11::X11ShmSurface;
 use alloc::collections::BTreeMap as HashMap;
 use alloc::sync::Arc;
 use core::ffi::{c_void, CStr};
@@ -390,7 +390,7 @@ pub unsafe fn egl_create_window_surface(
 
     #[cfg(all(feature = "std", target_os = "linux"))]
     let x11_surface = if win != 0 && dri3_surface.is_none() {
-        let dpy_ptr = native_display_ptr() as *mut crate::platform::x11::x11_shm::Display;
+        let dpy_ptr = native_display_ptr() as *mut crate::platform::x11::Display;
         match unsafe { X11ShmSurface::new(dpy_ptr, win as u64, width, height) } {
             Ok(s) => Some(s),
             Err(_) => {
@@ -457,7 +457,7 @@ pub unsafe fn egl_create_native_window_surface(
 
     #[cfg(all(feature = "std", any(target_os = "linux", target_os = "freebsd")))]
     let x11_surface = if n.kind == ANGLE_WGPU_NATIVE_X11 && dri3_surface.is_none() {
-        let dpy_ptr = n.display as *mut crate::platform::x11::x11_shm::Display;
+        let dpy_ptr = n.display as *mut crate::platform::x11::Display;
         match unsafe { X11ShmSurface::new(dpy_ptr, n.window, width, height) } {
             Ok(s) => Some(s),
             Err(_) => {

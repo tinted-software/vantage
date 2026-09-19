@@ -9,6 +9,6 @@ std = []
 [dependencies]
 bytemuck.workspace = true
 vantage-raster = { path = "../raster", default-features = false }
-
+vantage-shader = { path = "../shader", default-features = false }
 hashbrown.workspace = true
 smallvec = { version = "1.16.1", default-features = false }
