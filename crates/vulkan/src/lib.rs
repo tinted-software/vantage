@@ -1376,7 +1376,7 @@ mod tests {
             );
 
             // Load SPIR-V into shader module
-            let spirv_bytes = include_bytes!("../../../../prism/lib/prism/testdata_flip_frag.spv");
+            let spirv_bytes = include_bytes!("../../shader/testdata/testdata_flip_frag.spv");
             let sm_info = VkShaderModuleCreateInfo {
                 sType: VkStructureType::VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                 pNext: ptr::null(),
