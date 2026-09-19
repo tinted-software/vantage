@@ -12,6 +12,7 @@ crate-type = ["rlib"]
 [features]
 default = ["std"]
 std = []
+capi = []
 
 [dependencies]
 smallvec = { version = "1.16.1", default-features = false }

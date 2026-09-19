@@ -187,12 +187,7 @@ pub enum Cmd {
         w: u32,
         h: u32,
     },
-    SetScissor {
-        x: i32,
-        y: i32,
-        w: u32,
-        h: u32,
-    },
+    SetScissor(Option<(i32, i32, u32, u32)>),
     SetFragState(alloc::boxed::Box<vantage_raster::FragState>),
     BindAttachments {
         color: Option<ImageId>,
@@ -458,7 +453,7 @@ impl Queue {
                 }
                 PushConstants { data } => push = *data,
                 SetViewport { x, y, w, h } => viewport = (*x, *y, *w, *h),
-                SetScissor { x, y, w, h } => scissor = Some((*x, *y, *w, *h)),
+                SetScissor(rect) => scissor = *rect,
                 BindAttachments {
                     color,
                     depth,
@@ -467,6 +462,11 @@ impl Queue {
                     color_target = *color;
                     depth_target = *depth;
                     stencil_target = *stencil;
+                    // Record on the device so a later submission (e.g. after
+                    // glFlush) restores the binding.
+                    dev.color_attachment = *color;
+                    dev.depth_attachment = *depth;
+                    dev.stencil_attachment = *stencil;
                 }
                 ClearAttachments {
                     color,
@@ -525,7 +525,11 @@ impl Queue {
                         &current_frag_state,
                     );
                 }
-                DrawMesh { vertices, indices, pipeline } => {
+                DrawMesh {
+                    vertices,
+                    indices,
+                    pipeline,
+                } => {
                     execute_draw_mesh(
                         dev,
                         pipeline,
@@ -545,16 +549,18 @@ impl Queue {
 }
 
 fn clear_color_image(im: &mut Image, color: [f32; 4]) {
-    match im.format {
-        Format::R8G8B8A8Unorm | Format::B8G8R8A8Unorm => {
-            for px in im.data.chunks_exact_mut(4) {
-                px[0] = (color[0] * 255.0 + 0.5) as u8;
-                px[1] = (color[1] * 255.0 + 0.5) as u8;
-                px[2] = (color[2] * 255.0 + 0.5) as u8;
-                px[3] = (color[3] * 255.0 + 0.5) as u8;
-            }
-        }
-        _ => {}
+    let (b0, b1, b2, b3) = match im.format {
+        // Stored byte order: R,G,B,A.
+        Format::R8G8B8A8Unorm => (color[0], color[1], color[2], color[3]),
+        // Stored byte order: B,G,R,A.
+        Format::B8G8R8A8Unorm => (color[2], color[1], color[0], color[3]),
+        _ => return,
+    };
+    for px in im.data.chunks_exact_mut(4) {
+        px[0] = (b0 * 255.0 + 0.5) as u8;
+        px[1] = (b1 * 255.0 + 0.5) as u8;
+        px[2] = (b2 * 255.0 + 0.5) as u8;
+        px[3] = (b3 * 255.0 + 0.5) as u8;
     }
 }
 
@@ -907,7 +913,9 @@ fn execute_draw_mesh(
     stencil_id: Option<ImageId>,
     frag_state: &vantage_raster::FragState,
 ) {
-    let Some(c_id) = color_id else { return; };
+    let Some(c_id) = color_id else {
+        return;
+    };
 
     let raster_state = RasterState {
         viewport,
@@ -991,7 +999,13 @@ fn execute_draw_mesh(
         }
     }
 
-    if let Some(c_im) = color_img { dev.images.insert(c_id, c_im); }
-    if let (Some(d_id), Some(d_im)) = (depth_id, depth_img) { dev.images.insert(d_id, d_im); }
-    if let (Some(s_id), Some(s_im)) = (stencil_id, stencil_img) { dev.images.insert(s_id, s_im); }
+    if let Some(c_im) = color_img {
+        dev.images.insert(c_id, c_im);
+    }
+    if let (Some(d_id), Some(d_im)) = (depth_id, depth_img) {
+        dev.images.insert(d_id, d_im);
+    }
+    if let (Some(s_id), Some(s_im)) = (stencil_id, stencil_img) {
+        dev.images.insert(s_id, s_im);
+    }
 }

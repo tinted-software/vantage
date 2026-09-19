@@ -206,7 +206,6 @@ impl Default for FragState {
     }
 }
 
-
 /// Fragment function seam. Given the shared state and interpolated varyings,
 /// writes the pre-blend BGRA8 color and returns whether the fragment passes
 /// the alpha test (`false` = discard).
@@ -215,6 +214,34 @@ impl Default for FragState {
 /// All blending, depth and stencil handling stays in the raster core.
 pub type FragFn =
     unsafe fn(ctx: *const FragState, varying: *const Varyings, out: *mut [u8; 4]) -> bool;
+
+/// Linear interpolation of all vertex attributes at parameter `t` (a = t 0,
+/// b = t 1). Used for homogeneous clip-space clipping, where attributes are
+/// interpolated in clip space before perspective division.
+fn lerp_vertex(a: &Vertex, b: &Vertex, t: f32) -> Vertex {
+    let lerp4 = |x: [f32; 4], y: [f32; 4]| {
+        [
+            x[0] + (y[0] - x[0]) * t,
+            x[1] + (y[1] - x[1]) * t,
+            x[2] + (y[2] - x[2]) * t,
+            x[3] + (y[3] - x[3]) * t,
+        ]
+    };
+    Vertex {
+        pos: lerp4(a.pos, b.pos),
+        color: lerp4(a.color, b.color),
+        tex0: [
+            a.tex0[0] + (b.tex0[0] - a.tex0[0]) * t,
+            a.tex0[1] + (b.tex0[1] - a.tex0[1]) * t,
+        ],
+        tex1: [
+            a.tex1[0] + (b.tex1[0] - a.tex1[0]) * t,
+            a.tex1[1] + (b.tex1[1] - a.tex1[1]) * t,
+        ],
+        fog: a.fog + (b.fog - a.fog) * t,
+        _pad: 0.0,
+    }
+}
 
 // ============================================================================
 // Raster pipeline state
@@ -348,13 +375,25 @@ fn wrap_coord(x: f32, mode: u32) -> f32 {
         } else {
             let i = x as i32;
             let f = x - (i as f32);
-            if f < 0.0 { f + 1.0 } else { f }
+            if f < 0.0 {
+                f + 1.0
+            } else {
+                f
+            }
         }
     } else if mode == gl::CLAMP_TO_EDGE {
         clamp01(x)
     } else {
-        let f = if x >= 0.0 && x < 1.0 { x } else { x - libm::floorf(x) };
-        if (libm::floorf(x) as i64) & 1 == 0 { f } else { 1.0 - f }
+        let f = if x >= 0.0 && x < 1.0 {
+            x
+        } else {
+            x - libm::floorf(x)
+        };
+        if (libm::floorf(x) as i64) & 1 == 0 {
+            f
+        } else {
+            1.0 - f
+        }
     }
 }
 
@@ -697,7 +736,11 @@ impl<'a> PrimitiveRasterizer<'a> {
         // 1. Fragment Function (color, texenv, fog, alpha-test)
         let mut frag_color = [0u8; 4]; // BGRA8
         let alpha_pass = if (self.frag_fn as *const () == reference_frag as *const ()) {
-            reference_frag(self.frag_ctx, varying, frag_color.as_mut_ptr() as *mut [u8; 4])
+            reference_frag(
+                self.frag_ctx,
+                varying,
+                frag_color.as_mut_ptr() as *mut [u8; 4],
+            )
         } else {
             unsafe {
                 (self.frag_fn)(
@@ -792,10 +835,54 @@ impl<'a> PrimitiveRasterizer<'a> {
         };
 
         let cc = self.state.blend_color;
-        let r = Self::blend_channel(src_r, dst_r, self.state.src_rgb, self.state.dst_rgb, src_r, dst_r, src_a, dst_a, cc[0], cc[3]);
-        let g = Self::blend_channel(src_g, dst_g, self.state.src_rgb, self.state.dst_rgb, src_g, dst_g, src_a, dst_a, cc[1], cc[3]);
-        let b = Self::blend_channel(src_b, dst_b, self.state.src_rgb, self.state.dst_rgb, src_b, dst_b, src_a, dst_a, cc[2], cc[3]);
-        let a = Self::blend_channel(src_a, dst_a, self.state.src_alpha, self.state.dst_alpha, src_a, dst_a, src_a, dst_a, cc[3], cc[3]);
+        let r = Self::blend_channel(
+            src_r,
+            dst_r,
+            self.state.src_rgb,
+            self.state.dst_rgb,
+            src_r,
+            dst_r,
+            src_a,
+            dst_a,
+            cc[0],
+            cc[3],
+        );
+        let g = Self::blend_channel(
+            src_g,
+            dst_g,
+            self.state.src_rgb,
+            self.state.dst_rgb,
+            src_g,
+            dst_g,
+            src_a,
+            dst_a,
+            cc[1],
+            cc[3],
+        );
+        let b = Self::blend_channel(
+            src_b,
+            dst_b,
+            self.state.src_rgb,
+            self.state.dst_rgb,
+            src_b,
+            dst_b,
+            src_a,
+            dst_a,
+            cc[2],
+            cc[3],
+        );
+        let a = Self::blend_channel(
+            src_a,
+            dst_a,
+            self.state.src_alpha,
+            self.state.dst_alpha,
+            src_a,
+            dst_a,
+            src_a,
+            dst_a,
+            cc[3],
+            cc[3],
+        );
 
         let out_r = (r * 255.0 + 0.5) as u8;
         let out_g = (g * 255.0 + 0.5) as u8;
@@ -804,15 +891,31 @@ impl<'a> PrimitiveRasterizer<'a> {
 
         let mask = self.state.color_mask;
         if self.targets.bgra_order {
-            if mask & 1 != 0 { c_out[2] = out_r; }
-            if mask & 2 != 0 { c_out[1] = out_g; }
-            if mask & 4 != 0 { c_out[0] = out_b; }
-            if mask & 8 != 0 { c_out[3] = out_a; }
+            if mask & 1 != 0 {
+                c_out[2] = out_r;
+            }
+            if mask & 2 != 0 {
+                c_out[1] = out_g;
+            }
+            if mask & 4 != 0 {
+                c_out[0] = out_b;
+            }
+            if mask & 8 != 0 {
+                c_out[3] = out_a;
+            }
         } else {
-            if mask & 1 != 0 { c_out[0] = out_r; }
-            if mask & 2 != 0 { c_out[1] = out_g; }
-            if mask & 4 != 0 { c_out[2] = out_b; }
-            if mask & 8 != 0 { c_out[3] = out_a; }
+            if mask & 1 != 0 {
+                c_out[0] = out_r;
+            }
+            if mask & 2 != 0 {
+                c_out[1] = out_g;
+            }
+            if mask & 4 != 0 {
+                c_out[2] = out_b;
+            }
+            if mask & 8 != 0 {
+                c_out[3] = out_a;
+            }
         }
     }
     /// Project clip coordinate (x,y,z,w) -> screen coordinate (px, py, z)
@@ -837,6 +940,49 @@ impl<'a> PrimitiveRasterizer<'a> {
     }
 
     pub fn draw_triangle(&mut self, v0: &Vertex, v1: &Vertex, v2: &Vertex) {
+        // Homogeneous near-plane clip (Sutherland-Hodgman over z + w >= 0 and
+        // w >= 0). A triangle crossing the eye plane keeps its visible part
+        // instead of being discarded wholesale; a wholly-behind triangle is
+        // dropped, matching GL clip behavior.
+        let EPS: f32 = 1e-5;
+        let mut poly: alloc::vec::Vec<Vertex> = alloc::vec![*v0, *v1, *v2];
+        // (w > 0) and (z + w >= 0, the near plane). Both clip in homogeneous
+        // space before any perspective divide.
+        let mut planes: alloc::vec::Vec<alloc::boxed::Box<dyn Fn(&Vertex) -> f32>> =
+            alloc::vec::Vec::new();
+        planes.push(alloc::boxed::Box::new(move |v: &Vertex| v.pos[3] - EPS));
+        planes.push(alloc::boxed::Box::new(|v: &Vertex| v.pos[2] + v.pos[3]));
+        for plane in &planes {
+            if poly.iter().all(|v| plane(v) >= 0.0) {
+                continue;
+            }
+            let src = &poly;
+            let mut out: alloc::vec::Vec<Vertex> = alloc::vec::Vec::new();
+            let n = src.len();
+            for i in 0..n {
+                let a = &src[i];
+                let b = &src[(i + 1) % n];
+                let da = plane(a);
+                let db = plane(b);
+                if da >= 0.0 {
+                    out.push(*a);
+                }
+                if (da >= 0.0) != (db >= 0.0) {
+                    let t = da / (da - db);
+                    out.push(lerp_vertex(a, b, t));
+                }
+            }
+            if out.len() < 3 {
+                return;
+            }
+            poly = out;
+        }
+        for i in 1..poly.len() - 1 {
+            self.draw_clipped_triangle(&poly[0], &poly[i], &poly[i + 1]);
+        }
+    }
+
+    fn draw_clipped_triangle(&mut self, v0: &Vertex, v1: &Vertex, v2: &Vertex) {
         let (Some((p0, w0)), Some((p1, w1)), Some((p2, w2))) = (
             self.project_vertex(v0),
             self.project_vertex(v1),
@@ -860,7 +1006,10 @@ impl<'a> PrimitiveRasterizer<'a> {
         }
 
         let is_ccw = area > 0;
-        let is_front = is_ccw == self.state.front_face_ccw;
+        // The rasterizer flips Y when mapping clip space to the top-down
+        // framebuffer, which reverses winding: a GL-CCW front face has
+        // negative screen-space area here.
+        let is_front = is_ccw != self.state.front_face_ccw;
 
         // Culling
         match self.state.cull_mode {
@@ -881,16 +1030,17 @@ impl<'a> PrimitiveRasterizer<'a> {
         }
 
         // Scissor & Viewport clamping for bounding box
-        let (min_clip_x, max_clip_x, min_clip_y, max_clip_y) = if let Some((sx, sy, sw, sh)) = self.state.scissor {
-            (
-                sx.max(0),
-                (sx + sw as i32).min(self.targets.width as i32),
-                sy.max(0),
-                (sy + sh as i32).min(self.targets.height as i32),
-            )
-        } else {
-            (0, self.targets.width as i32, 0, self.targets.height as i32)
-        };
+        let (min_clip_x, max_clip_x, min_clip_y, max_clip_y) =
+            if let Some((sx, sy, sw, sh)) = self.state.scissor {
+                (
+                    sx.max(0),
+                    (sx + sw as i32).min(self.targets.width as i32),
+                    sy.max(0),
+                    (sy + sh as i32).min(self.targets.height as i32),
+                )
+            } else {
+                (0, self.targets.width as i32, 0, self.targets.height as i32)
+            };
 
         let min_x = (((x0.min(x1).min(x2)) >> 4) as i32).max(min_clip_x);
         let max_x = (((x0.max(x1).max(x2) + 15) >> 4) as i32).min(max_clip_x - 1);
@@ -905,7 +1055,11 @@ impl<'a> PrimitiveRasterizer<'a> {
         // w(x, y) = (x_b - x_a) * (fy - y_a) - (y_b - y_a) * (fx - x_a)
         // dw/dx = -(y_b - y_a) * 16
         // dw/dy = (x_b - x_a) * 16
-        let (sign, a_val) = if area > 0 { (1i64, area) } else { (-1i64, -area) };
+        let (sign, a_val) = if area > 0 {
+            (1i64, area)
+        } else {
+            (-1i64, -area)
+        };
         let inv_area = 1.0 / (a_val as f32);
 
         let a01 = -(y2 - y1) * 16 * sign;
@@ -967,12 +1121,10 @@ impl<'a> PrimitiveRasterizer<'a> {
         let mut row_a = v0.color[3] + da_dx * start_dx + da_dy * start_dy;
         let mut row_fog = v0.fog * w0 + dfog_dx * start_dx + dfog_dy * start_dy;
 
-        // Check if early-Z can be enabled (alpha test disabled)
-        let alpha_test_active = unsafe {
-            let st = &*self.frag_ctx;
-            st.alpha_func != gl::ALWAYS
-        };
-
+        // Early-Z rejection: safe whenever the fragment cannot mutate depth
+        // or stencil state before failing (no stencil side effects). Alpha
+        // test does not matter: a discarded fragment writes nothing, and the
+        // depth comparison uses the same z either way.
         for py in min_y..=max_y {
             let mut w0_edge = row_w0;
             let mut w1_edge = row_w1;
@@ -998,10 +1150,15 @@ impl<'a> PrimitiveRasterizer<'a> {
                     let mut skip_frag = false;
                     let pixel_idx = (py as usize) * (self.targets.width as usize) + (px as usize);
 
-                    if !alpha_test_active && self.state.depth_test && !self.state.stencil_test {
+                    if self.state.depth_test && !self.state.stencil_test {
                         if let Some(ref depth) = self.targets.depth {
                             let off = pixel_idx * 4;
-                            let fb_z = f32::from_ne_bytes([depth[off], depth[off+1], depth[off+2], depth[off+3]]);
+                            let fb_z = f32::from_ne_bytes([
+                                depth[off],
+                                depth[off + 1],
+                                depth[off + 2],
+                                depth[off + 3],
+                            ]);
                             if !depth_pass(self.state.depth_func, z, fb_z) {
                                 skip_frag = true;
                             }

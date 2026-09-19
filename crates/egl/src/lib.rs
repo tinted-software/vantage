@@ -68,7 +68,6 @@ pub mod freestanding {
     }
 }
 
-
 #[no_mangle]
 pub unsafe extern "C" fn eglWaitNative(_engine: EGLint) -> EGLBoolean {
     EGL_TRUE

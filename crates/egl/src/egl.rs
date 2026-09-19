@@ -626,11 +626,23 @@ pub unsafe fn egl_make_current(
 }
 
 pub unsafe fn egl_get_current_context() -> EGLContext {
+    // EGLContext handles are Arc<Mutex<EglContextState>> pointers (see
+    // egl_create_context); the GL registry stores the inner GlContext, whose
+    // address is a different object. Look the owning EGL context up in the
+    // display's context table.
     let cur = CURRENT_CONTEXT.lock();
-    match cur.as_ref() {
-        Some(ctx) => Arc::as_ptr(ctx) as EGLContext,
-        None => EGL_NO_CONTEXT,
+    let Some(gl_arc) = cur.as_ref().cloned() else {
+        return EGL_NO_CONTEXT;
+    };
+    drop(cur);
+    let dpy_arc = get_or_create_display();
+    let d = dpy_arc.lock();
+    for state in d.contexts.values() {
+        if Arc::ptr_eq(&state.lock().gl_context, &gl_arc) {
+            return Arc::into_raw(state.clone()) as EGLContext;
+        }
     }
+    EGL_NO_CONTEXT
 }
 
 pub unsafe fn egl_get_current_surface(_readdraw: EGLint) -> EGLSurface {
@@ -747,8 +759,12 @@ pub unsafe fn egl_resize_surface(surface: EGLSurface, width: u32, height: u32) -
 
             let mut surf = surf_arc.lock();
             if surf.hal_color_image.is_none() {
-                let c_img = gl.hal_device.create_image(vantage_hal::Format::B8G8R8A8Unorm, w, h);
-                let d_img = gl.hal_device.create_image(vantage_hal::Format::D32Sfloat, w, h);
+                let c_img = gl
+                    .hal_device
+                    .create_image(vantage_hal::Format::B8G8R8A8Unorm, w, h);
+                let d_img = gl
+                    .hal_device
+                    .create_image(vantage_hal::Format::D32Sfloat, w, h);
                 surf.hal_color_image = Some(c_img);
                 surf.hal_depth_image = Some(d_img);
             }

@@ -582,6 +582,7 @@ pub unsafe extern "C" fn glDeleteTextures(n: GLsizei, textures: *const GLuint) {
         return;
     }
     with_context(|ctx| {
+        crate::flush_pending(ctx);
         let slice = core::slice::from_raw_parts(textures, n as usize);
         ctx.texture_manager.delete_textures(slice);
     });
@@ -611,6 +612,7 @@ pub unsafe extern "C" fn glTexImage2D(
         return;
     }
     with_context(|ctx| {
+        crate::flush_pending(ctx);
         let tm = &mut ctx.texture_manager;
         if let Some(tex) = tm.get_current_texture_mut() {
             let data_slice = if !pixels.is_null() {
@@ -652,6 +654,7 @@ pub unsafe extern "C" fn glTexSubImage2D(
         return;
     }
     with_context(|ctx| {
+        crate::flush_pending(ctx);
         let tm = &mut ctx.texture_manager;
         if let Some(tex) = tm.get_current_texture_mut() {
             let num_pixels = (width * height) as usize;
@@ -797,7 +800,8 @@ pub unsafe extern "C" fn glTexEnvfv(target: GLenum, pname: GLenum, params: *cons
         if target == GL_TEXTURE_ENV {
             if pname == GL_TEXTURE_ENV_COLOR {
                 unsafe {
-                    ctx.texenv_color[unit] = [*params, *params.add(1), *params.add(2), *params.add(3)];
+                    ctx.texenv_color[unit] =
+                        [*params, *params.add(1), *params.add(2), *params.add(3)];
                 }
             } else if pname == GL_TEXTURE_ENV_MODE {
                 unsafe {
@@ -1276,6 +1280,16 @@ pub unsafe extern "C" fn glFlush() {
         let cmd = core::mem::take(&mut ctx.command_buffer);
         ctx.hal_device.submit(&cmd);
     });
+}
+
+/// Submit pending GL commands. Called before operations that would invalidate
+/// state already referenced by queued commands (texture redefine/delete) so
+/// rasterization observes a consistent snapshot.
+pub fn flush_pending(ctx: &mut GlContext) {
+    if !ctx.command_buffer.ops.is_empty() {
+        let cmd = core::mem::take(&mut ctx.command_buffer);
+        ctx.hal_device.submit(&cmd);
+    }
 }
 
 pub unsafe extern "C" fn glFinish() {

@@ -1138,12 +1138,12 @@ pub unsafe extern "C" fn vkCmdSetScissor(
     }
     let cb = &mut *(commandBuffer as *mut CommandBufferHandle);
     let sc = &*pScissors;
-    cb.commands.ops.push(Cmd::SetScissor {
-        x: sc.offset.x,
-        y: sc.offset.y,
-        w: sc.extent.width,
-        h: sc.extent.height,
-    });
+    cb.commands.ops.push(Cmd::SetScissor(Some((
+        sc.offset.x,
+        sc.offset.y,
+        sc.extent.width,
+        sc.extent.height,
+    ))));
 }
 
 #[no_mangle]

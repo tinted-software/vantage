@@ -213,13 +213,25 @@ fn wrap_c(x: f32, mode: u32) -> f32 {
         } else {
             let i = x as i32;
             let f = x - (i as f32);
-            if f < 0.0 { f + 1.0 } else { f }
+            if f < 0.0 {
+                f + 1.0
+            } else {
+                f
+            }
         }
     } else if mode == gl::CLAMP_TO_EDGE {
         clamp_unit(x)
     } else {
-        let f = if x >= 0.0 && x < 1.0 { x } else { x - libm::floorf(x) };
-        if (libm::floorf(x) as i64) & 1 == 0 { f } else { 1.0 - f }
+        let f = if x >= 0.0 && x < 1.0 {
+            x
+        } else {
+            x - libm::floorf(x)
+        };
+        if (libm::floorf(x) as i64) & 1 == 0 {
+            f
+        } else {
+            1.0 - f
+        }
     }
 }
 

@@ -583,9 +583,9 @@ impl GlContext {
         };
 
         let cull_mode = if self.cull_face_enabled {
+            // RasterState.cull_mode expects actual GL enums (0 = none).
             match self.cull_face_mode {
-                GL_FRONT => 1,
-                GL_BACK => 2,
+                GL_FRONT | GL_BACK | GL_FRONT_AND_BACK => self.cull_face_mode,
                 _ => 0,
             }
         } else {
@@ -755,7 +755,11 @@ impl GlContext {
             }
         }
 
-        frag_state.alpha_func = if self.alpha_test_enabled { self.alpha_func } else { vantage_raster::gl::ALWAYS };
+        frag_state.alpha_func = if self.alpha_test_enabled {
+            self.alpha_func
+        } else {
+            vantage_raster::gl::ALWAYS
+        };
         frag_state.alpha_ref = self.alpha_ref;
 
         if self.fog_enabled {
@@ -771,7 +775,10 @@ impl GlContext {
             frag_state.fog_color = self.fog_color;
         }
 
-        self.command_buffer.push(vantage_hal::Cmd::SetFragState(alloc::boxed::Box::new(frag_state)));
+        self.command_buffer
+            .push(vantage_hal::Cmd::SetFragState(alloc::boxed::Box::new(
+                frag_state,
+            )));
 
         self.command_buffer.push(vantage_hal::Cmd::SetViewport {
             x: self.viewport.0,
@@ -779,14 +786,19 @@ impl GlContext {
             w: self.viewport.2.max(1) as u32,
             h: self.viewport.3.max(1) as u32,
         });
-        if self.scissor_test_enabled {
-            self.command_buffer.push(vantage_hal::Cmd::SetScissor {
-                x: self.scissor.0,
-                y: self.scissor.1,
-                w: self.scissor.2.max(1) as u32,
-                h: self.scissor.3.max(1) as u32,
-            });
-        }
+        // Scissor state is emitted on every draw so a disable is represented
+        // in the command stream instead of leaking from a previous draw.
+        self.command_buffer
+            .push(vantage_hal::Cmd::SetScissor(if self.scissor_test_enabled {
+                Some((
+                    self.scissor.0,
+                    self.scissor.1,
+                    self.scissor.2.max(1) as u32,
+                    self.scissor.3.max(1) as u32,
+                ))
+            } else {
+                None
+            }));
 
         self.command_buffer.push(vantage_hal::Cmd::DrawMesh {
             vertices: transformed,
