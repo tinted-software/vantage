@@ -525,24 +525,26 @@ fn apply_fog(state: &FragState, color: &mut [f32; 4], fog: f32) {
 
 /// Reference scalar fragment shader (also the test oracle): texenv chain over
 /// unit 0 then unit 1, fog, alpha test.
+#[inline(always)]
 pub fn reference_frag(ctx: *const FragState, varying: *const Varyings, out: *mut [u8; 4]) -> bool {
     unsafe {
         let st = &*ctx;
         let v = &*varying;
         let mut color = v.color;
-        for unit in 0..2 {
-            let tex = &st.textures[unit];
-            if !tex.enabled {
-                continue;
-            }
-            let tc = if unit == 0 { v.tex0 } else { v.tex1 };
-            let linear = match tex.mag_filter {
-                gl::NEAREST => false,
-                _ => true,
-            };
-            let s = sample_texel(tex, tc[0], tc[1], linear);
-            color = texenv_apply(st.texenv_mode[unit], s, color, st.texenv_color[unit]);
+
+        let tex0 = &st.textures[0];
+        if tex0.enabled {
+            let linear = tex0.mag_filter != gl::NEAREST;
+            let s = sample_texel(tex0, v.tex0[0], v.tex0[1], linear);
+            color = texenv_apply(st.texenv_mode[0], s, color, st.texenv_color[0]);
         }
+        let tex1 = &st.textures[1];
+        if tex1.enabled {
+            let linear = tex1.mag_filter != gl::NEAREST;
+            let s = sample_texel(tex1, v.tex1[0], v.tex1[1], linear);
+            color = texenv_apply(st.texenv_mode[1], s, color, st.texenv_color[1]);
+        }
+
         if st.fog_mode != 0 {
             apply_fog(st, &mut color, v.fog);
         }
@@ -688,19 +690,22 @@ impl<'a> PrimitiveRasterizer<'a> {
         clamp01(src * s_weight + dst * d_weight)
     }
 
-    #[inline]
     #[inline(always)]
     pub fn shade_and_blend_pixel(&mut self, px: i32, py: i32, z: f32, varying: &Varyings) {
         let pixel_idx = (py as usize) * (self.targets.width as usize) + (px as usize);
 
         // 1. Fragment Function (color, texenv, fog, alpha-test)
         let mut frag_color = [0u8; 4]; // BGRA8
-        let alpha_pass = unsafe {
-            (self.frag_fn)(
-                self.frag_ctx,
-                varying as *const Varyings,
-                frag_color.as_mut_ptr() as *mut [u8; 4],
-            )
+        let alpha_pass = if (self.frag_fn as *const () == reference_frag as *const ()) {
+            reference_frag(self.frag_ctx, varying, frag_color.as_mut_ptr() as *mut [u8; 4])
+        } else {
+            unsafe {
+                (self.frag_fn)(
+                    self.frag_ctx,
+                    varying as *const Varyings,
+                    frag_color.as_mut_ptr() as *mut [u8; 4],
+                )
+            }
         };
         if !alpha_pass {
             return;
@@ -939,6 +944,7 @@ impl<'a> PrimitiveRasterizer<'a> {
         let (dg_dx, dg_dy) = calc_gradients(v0.color[1], v1.color[1], v2.color[1]);
         let (db_dx, db_dy) = calc_gradients(v0.color[2], v1.color[2], v2.color[2]);
         let (da_dx, da_dy) = calc_gradients(v0.color[3], v1.color[3], v2.color[3]);
+        let (dfog_dx, dfog_dy) = calc_gradients(v0.fog * w0, v1.fog * w1, v2.fog * w2);
 
         // Start coordinates at (min_x + 0.5, min_y + 0.5)
         let start_fx = (min_x as i64 * 16) + 8;
@@ -959,6 +965,7 @@ impl<'a> PrimitiveRasterizer<'a> {
         let mut row_g = v0.color[1] + dg_dx * start_dx + dg_dy * start_dy;
         let mut row_b = v0.color[2] + db_dx * start_dx + db_dy * start_dy;
         let mut row_a = v0.color[3] + da_dx * start_dx + da_dy * start_dy;
+        let mut row_fog = v0.fog * w0 + dfog_dx * start_dx + dfog_dy * start_dy;
 
         // Check if early-Z can be enabled (alpha test disabled)
         let alpha_test_active = unsafe {
@@ -980,8 +987,13 @@ impl<'a> PrimitiveRasterizer<'a> {
             let mut cb = row_b;
             let mut ca = row_a;
 
+            let mut entered = false;
+            let mut cfog = row_fog;
+
             for px in min_x..=max_x {
-                if (w0_edge | w1_edge | w2_edge) >= 0 {
+                let inside = (w0_edge | w1_edge | w2_edge) >= 0;
+                if inside {
+                    entered = true;
                     // Early-Z test when alpha testing is disabled
                     let mut skip_frag = false;
                     let pixel_idx = (py as usize) * (self.targets.width as usize) + (px as usize);
@@ -1003,20 +1015,23 @@ impl<'a> PrimitiveRasterizer<'a> {
                                 color: v2.color,
                                 tex0: [u0 * inv_w, v0_coord * inv_w],
                                 tex1: [0.0, 0.0],
-                                fog: p2[2],
-                                view_z: p2[2],
+                                fog: v2.fog,
+                                view_z: v2.fog,
                             }
                         } else {
                             Varyings {
                                 color: [cr, cg, cb, ca],
                                 tex0: [u0 * inv_w, v0_coord * inv_w],
                                 tex1: [0.0, 0.0],
-                                fog: z,
-                                view_z: z,
+                                fog: cfog * inv_w,
+                                view_z: cfog * inv_w,
                             }
                         };
                         self.shade_and_blend_pixel(px, py, z, &varying);
                     }
+                } else if entered {
+                    // Convex triangle property: once we exit on a scanline, we never re-enter!
+                    break;
                 }
 
                 w0_edge += a01;
@@ -1031,6 +1046,7 @@ impl<'a> PrimitiveRasterizer<'a> {
                 cg += dg_dx;
                 cb += db_dx;
                 ca += da_dx;
+                cfog += dfog_dx;
             }
 
             row_w0 += b01;
@@ -1045,6 +1061,7 @@ impl<'a> PrimitiveRasterizer<'a> {
             row_g += dg_dy;
             row_b += db_dy;
             row_a += da_dy;
+            row_fog += dfog_dy;
         }
     }
     pub fn draw_point(&mut self, v: &Vertex) {

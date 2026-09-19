@@ -702,41 +702,23 @@ impl GlContext {
                 ];
             }
 
-            // Eye distance for fog
+            // Eye distance for fog: in OpenGL §3.10, fog coordinate is eye-space distance |z_eye|
             let eye_p = mv.mul_vec4(p);
-            let eye_z = -eye_p.z.abs();
+            let eye_dist = eye_p.z.abs();
 
             transformed.push(vantage_raster::Vertex {
                 pos: [clip.x, clip.y, clip.z, clip.w],
                 color,
                 tex0: [v.tex_coord[0], v.tex_coord[1]],
                 tex1: [0.0, 0.0],
-                fog: eye_z,
+                fog: eye_dist,
                 _pad: 0.0,
             });
         }
 
-        // Upload transformed vertex data into a HAL buffer
-        let v_bytes: &[u8] = bytemuck::cast_slice(&transformed);
-        let v_buf = self.hal_device.create_buffer(v_bytes.len() as u64);
-        if let Some(buf) = self.hal_device.buffer_mut(v_buf) {
-            buf.data.copy_from_slice(v_bytes);
-        }
-
-        let i_buf_opt = if let Some(ref inds) = final_indices {
-            let i_bytes: &[u8] = bytemuck::cast_slice(inds.as_ref());
-            let i_buf = self.hal_device.create_buffer(i_bytes.len() as u64);
-            if let Some(buf) = self.hal_device.buffer_mut(i_buf) {
-                buf.data.copy_from_slice(i_bytes);
-            }
-            Some(i_buf)
-        } else {
-            None
-        };
-
         // Create pipeline
         let key = self.build_pipeline_key(mode);
-        let pipe = self.hal_device.create_pipeline(vantage_hal::Pipeline {
+        let pipeline = vantage_hal::Pipeline {
             topology: key.topology,
             cull_mode: key.cull_mode,
             front_face_ccw: key.front_face_ccw,
@@ -747,8 +729,7 @@ impl GlContext {
             depth_write: key.depth_write,
             depth_func: key.depth_func,
             color_mask: key.color_mask,
-        });
-
+        };
 
         // Construct FragState with active texture and fragment settings
         let mut frag_state = vantage_raster::FragState::default();
@@ -792,9 +773,6 @@ impl GlContext {
 
         self.command_buffer.push(vantage_hal::Cmd::SetFragState(alloc::boxed::Box::new(frag_state)));
 
-        // Record draw commands
-        self.command_buffer
-            .push(vantage_hal::Cmd::BindPipeline { pipeline: pipe });
         self.command_buffer.push(vantage_hal::Cmd::SetViewport {
             x: self.viewport.0,
             y: self.viewport.1,
@@ -810,31 +788,11 @@ impl GlContext {
             });
         }
 
-        let mut v_buffers = smallvec::SmallVec::new();
-        v_buffers.push((v_buf, 0));
-        self.command_buffer
-            .push(vantage_hal::Cmd::BindVertexBuffers {
-                first: 0,
-                buffers: v_buffers,
-            });
-
-        if let Some(i_buf) = i_buf_opt {
-            let num_inds = final_indices.as_ref().unwrap().len() as u32;
-            self.command_buffer.push(vantage_hal::Cmd::BindIndexBuffer {
-                buffer: i_buf,
-                offset: 0,
-                index_ty: vantage_hal::IndexType::U32,
-            });
-            self.command_buffer.push(vantage_hal::Cmd::DrawIndexed {
-                count: num_inds,
-                first: 0,
-            });
-        } else {
-            self.command_buffer.push(vantage_hal::Cmd::Draw {
-                count: transformed.len() as u32,
-                first: 0,
-            });
-        }
+        self.command_buffer.push(vantage_hal::Cmd::DrawMesh {
+            vertices: transformed,
+            indices: final_indices.map(|c| c.into_owned()),
+            pipeline,
+        });
     }
 
     pub fn call_display_list(&mut self, list_id: GLuint) {

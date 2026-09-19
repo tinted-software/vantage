@@ -213,6 +213,11 @@ pub enum Cmd {
         count: u32,
         first: u32,
     },
+    DrawMesh {
+        vertices: alloc::vec::Vec<Vertex>,
+        indices: Option<alloc::vec::Vec<u32>>,
+        pipeline: Pipeline,
+    },
     /// Readback for `glReadPixels`.
     CopyImageToBuffer {
         src: ImageId,
@@ -512,6 +517,20 @@ impl Queue {
                         index_buffer,
                         *first,
                         *count,
+                        viewport,
+                        scissor,
+                        color_target,
+                        depth_target,
+                        stencil_target,
+                        &current_frag_state,
+                    );
+                }
+                DrawMesh { vertices, indices, pipeline } => {
+                    execute_draw_mesh(
+                        dev,
+                        pipeline,
+                        vertices,
+                        indices.as_deref(),
                         viewport,
                         scissor,
                         color_target,
@@ -874,4 +893,105 @@ fn execute_draw(
     if let (Some(s_id), Some(s_im)) = (stencil_id, stencil_img) {
         dev.images.insert(s_id, s_im);
     }
+}
+
+fn execute_draw_mesh(
+    dev: &mut Device,
+    pipe: &Pipeline,
+    vertices: &[Vertex],
+    indices_opt: Option<&[u32]>,
+    viewport: (i32, i32, u32, u32),
+    scissor: Option<(i32, i32, u32, u32)>,
+    color_id: Option<ImageId>,
+    depth_id: Option<ImageId>,
+    stencil_id: Option<ImageId>,
+    frag_state: &vantage_raster::FragState,
+) {
+    let Some(c_id) = color_id else { return; };
+
+    let raster_state = RasterState {
+        viewport,
+        depth_range: (0.0, 1.0),
+        scissor,
+        cull_mode: pipe.cull_mode,
+        front_face_ccw: pipe.front_face_ccw,
+        shade_flat: false,
+        depth_test: pipe.depth_test,
+        depth_write: pipe.depth_write,
+        depth_func: pipe.depth_func,
+        stencil_test: false,
+        stencil_func: vantage_raster::gl::ALWAYS,
+        stencil_ref: 0,
+        stencil_func_mask: !0,
+        stencil_write_mask: !0,
+        stencil_fail: vantage_raster::gl::STENCIL_KEEP,
+        stencil_zfail: vantage_raster::gl::STENCIL_KEEP,
+        stencil_zpass: vantage_raster::gl::STENCIL_KEEP,
+        blend_enabled: pipe.blend_enabled,
+        src_rgb: pipe.src_factor,
+        dst_rgb: pipe.dst_factor,
+        src_alpha: pipe.src_factor,
+        dst_alpha: pipe.dst_factor,
+        blend_color: [0.0; 4],
+        color_mask: pipe.color_mask,
+        polygon_offset_fill: false,
+        polygon_offset_factor: 0.0,
+        polygon_offset_units: 0.0,
+        point_size: 1.0,
+        line_width: 1.0,
+    };
+
+    let mut color_img = dev.images.remove(&c_id);
+    let mut depth_img = depth_id.and_then(|id| dev.images.remove(&id));
+    let mut stencil_img = stencil_id.and_then(|id| dev.images.remove(&id));
+
+    if let Some(ref mut c_im) = color_img {
+        let is_bgra = c_im.format == Format::B8G8R8A8Unorm;
+        let c_stride = c_im.width * 4;
+        let w = c_im.width;
+        let h = c_im.height;
+
+        let d_slice = depth_img.as_mut().map(|im| im.data.as_mut_slice());
+        let s_slice = stencil_img.as_mut().map(|im| im.data.as_mut_slice());
+
+        let targets = Targets {
+            color: c_im.data.as_mut_slice(),
+            color_stride: c_stride,
+            width: w,
+            height: h,
+            bgra_order: is_bgra,
+            depth: d_slice,
+            stencil: s_slice,
+        };
+
+        let mut raster = vantage_raster::PrimitiveRasterizer::new(
+            &raster_state,
+            targets,
+            vantage_raster::reference_frag,
+            frag_state as *const FragState,
+        );
+
+        if let Some(indices) = indices_opt {
+            let mut i = 0;
+            while i + 2 < indices.len() {
+                let idx0 = indices[i] as usize;
+                let idx1 = indices[i + 1] as usize;
+                let idx2 = indices[i + 2] as usize;
+                if idx0 < vertices.len() && idx1 < vertices.len() && idx2 < vertices.len() {
+                    raster.draw_triangle(&vertices[idx0], &vertices[idx1], &vertices[idx2]);
+                }
+                i += 3;
+            }
+        } else {
+            let mut i = 0;
+            while i + 2 < vertices.len() {
+                raster.draw_triangle(&vertices[i], &vertices[i + 1], &vertices[i + 2]);
+                i += 3;
+            }
+        }
+    }
+
+    if let Some(c_im) = color_img { dev.images.insert(c_id, c_im); }
+    if let (Some(d_id), Some(d_im)) = (depth_id, depth_img) { dev.images.insert(d_id, d_im); }
+    if let (Some(s_id), Some(s_im)) = (stencil_id, stencil_img) { dev.images.insert(s_id, s_im); }
 }
