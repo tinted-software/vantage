@@ -39,3 +39,7 @@ asset = [
 asset = [
     { from = "glvnd/egl_vendor.d/10_vantage.json", to = "glvnd/egl_vendor.d" },
 ]
+
+[package.metadata.capi.header]
+name = "vantage"
+subdirectory = "vantage"

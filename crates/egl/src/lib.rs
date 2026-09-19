@@ -68,6 +68,22 @@ pub mod freestanding {
     }
 }
 
+
+#[no_mangle]
+pub unsafe extern "C" fn eglWaitNative(_engine: EGLint) -> EGLBoolean {
+    EGL_TRUE
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglWaitGL() -> EGLBoolean {
+    EGL_TRUE
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn eglWaitClient() -> EGLBoolean {
+    EGL_TRUE
+}
+
 // ============================================================================
 // EGL Exports
 // ============================================================================
@@ -379,6 +395,9 @@ pub fn get_gl_proc_address(name: &str) -> __eglMustCastToProperFunctionPointerTy
         "eglSwapInterval" => eglSwapInterval as *const (),
         "eglQueryString" => eglQueryString as *const (),
         "eglGetProcAddress" => eglGetProcAddress as *const (),
+        "eglWaitNative" => eglWaitNative as *const (),
+        "eglWaitGL" => eglWaitGL as *const (),
+        "eglWaitClient" => eglWaitClient as *const (),
         _ => core::ptr::null(),
     };
 
