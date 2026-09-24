@@ -1,213 +1,27 @@
-//! Vantage Shader — pliron-based fixed-function fragment pipeline.
+//! Vantage Shader — fixed-function fragment evaluation and AMDGPU shader programs.
 //!
-//! Generates and evaluates fixed-function fragment operations (per-unit TexEnv,
-//! alpha-test discard, fog blend) via a `pliron` intermediate representation.
+//! Two responsibilities:
 //!
-//! In `std` mode, `pliron-llvm` dialect is available. Native JIT execution via
-//! LLVM release tarball is marked with a documented `MISSING:` seam.
-//! In `no_std`, execution runs via the in-tree fragment executor.
+//! * **Fragment pipeline** (always compiled): a portable scalar evaluator for
+//!   the fixed-function fragment stage — per-unit TexEnv, alpha-test discard
+//!   and fog blend — bound into the software rasterizer through the
+//!   [`vantage_raster::FragFn`] seam. `vantage_raster::reference_frag` is an
+//!   independent implementation of the same contract and the differential
+//!   oracle for the tests below.
+//! * **AMDGPU programs** (`backend-amdgpu`): the legacy VS and the
+//!   fixed-function PS are built in pliron's LLVM dialect and compiled to
+//!   GFX10.3 machine code by `vantage-codegen`. Nothing here links LLVM and
+//!   nothing emits an ELF container: the driver loads the raw machine code plus
+//!   the compiler's `(register, value)` loader configuration directly.
 #![no_std]
 extern crate alloc;
 
-use hashbrown::HashMap;
 pub use vantage_raster::{gl, FragFn, FragState, SampledTexture, Varyings};
-pub mod offsets;
+
+#[cfg(feature = "backend-amdgpu")]
+pub mod amdgcn;
 #[cfg(feature = "spirv-frontend")]
 pub mod spirv;
-
-#[cfg(feature = "backend-llvm")]
-pub mod program;
-
-#[cfg(all(
-    feature = "backend-llvm",
-    any(feature = "backend-jit", feature = "backend-interp")
-))]
-pub mod lowering;
-
-#[cfg(all(feature = "backend-llvm", feature = "backend-jit"))]
-pub mod jit;
-
-#[cfg(all(feature = "backend-llvm", feature = "backend-interp"))]
-pub mod interp;
-
-#[cfg(feature = "backend-llvm")]
-pub use program::FragmentIr;
-/// Canonical fragment state key for pipeline caching.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FragmentKey {
-    pub tex_enabled: [bool; 2],
-    pub texenv_mode: [u32; 2],
-    pub alpha_func: u32,
-    pub alpha_ref_bits: u32,
-    pub fog_mode: u32,
-}
-
-impl FragmentKey {
-    pub fn from_state(st: &FragState) -> Self {
-        Self {
-            tex_enabled: [st.textures[0].enabled, st.textures[1].enabled],
-            texenv_mode: st.texenv_mode,
-            alpha_func: st.alpha_func,
-            alpha_ref_bits: st.alpha_ref.to_bits(),
-            fog_mode: st.fog_mode,
-        }
-    }
-}
-
-// ============================================================================
-// Pliron IR builder for fragment pipeline
-// ============================================================================
-
-/// Represents a simple SSA fragment program built with `pliron`.
-pub struct FragmentProgram {
-    pub key: FragmentKey,
-    backend: Backend,
-}
-
-/// Executable form chosen at compile time from the active backend features.
-enum Backend {
-    /// Portable scalar evaluation; always available, used as fallback.
-    Scalar,
-    /// Native machine code produced by cranelift-jit. The owning program
-    /// must outlive the entry pointer (executable lives in its arena).
-    #[cfg(feature = "backend-jit")]
-    Jit {
-        _program: jit::JitFragmentProgram,
-        entry: FragFn,
-    },
-    /// cranelift-interpreter execution of the same lowered function.
-    #[cfg(all(feature = "backend-interp", not(feature = "backend-jit")))]
-    Interp(interp::InterpFragmentProgram),
-}
-
-impl Backend {
-    fn compile(key: &FragmentKey) -> Self {
-        #[cfg(feature = "backend-jit")]
-        {
-            let ir = program::build_fragment_program(key);
-            match jit::JitFragmentProgram::compile(&ir) {
-                Ok(p) => {
-                    return Backend::Jit {
-                        entry: p.as_frag_fn(),
-                        _program: p,
-                    };
-                }
-                Err(e) => panic!("JIT COMPILE FAILED: {e}"),
-            }
-        }
-        #[cfg(not(feature = "backend-jit"))]
-        {
-            #[cfg(feature = "backend-interp")]
-            {
-                let ir = program::build_fragment_program(key);
-                if ir.has_external_calls() {
-                    // Interpreter cannot call host symbols (@vantage_expf).
-                    return Backend::Scalar;
-                }
-                return Backend::Interp(interp::InterpFragmentProgram::compile(&ir));
-            }
-            #[cfg(not(feature = "backend-interp"))]
-            Backend::Scalar
-        }
-    }
-}
-
-impl FragmentProgram {
-    /// Name of the active execution backend, for diagnostics/tests.
-    pub fn backend_name(&self) -> &'static str {
-        match &self.backend {
-            #[cfg(feature = "backend-jit")]
-            Backend::Jit { .. } => "cranelift-jit",
-            #[cfg(all(feature = "backend-interp", not(feature = "backend-jit")))]
-            Backend::Interp(_) => "cranelift-interp",
-            Backend::Scalar => "scalar",
-        }
-    }
-
-    pub fn compile(key: &FragmentKey) -> Self {
-        Self {
-            key: *key,
-            backend: Backend::compile(key),
-        }
-    }
-    /// Native entry point for draw-time binding. `None` means this backend
-    /// needs the generic dispatcher (scalar/interpreter).
-    #[inline]
-    fn direct_entry(&self) -> Option<FragFn> {
-        match &self.backend {
-            #[cfg(feature = "backend-jit")]
-            Backend::Jit { entry, .. } => Some(*entry),
-            #[cfg(all(feature = "backend-interp", not(feature = "backend-jit")))]
-            Backend::Interp(_) => None,
-            Backend::Scalar => None,
-        }
-    }
-
-    /// Evaluates the fragment program for the given state and varyings.
-    /// Returns true if alpha test passed, false if discarded.
-    #[inline]
-    pub unsafe fn evaluate(
-        &self,
-        ctx: *const FragState,
-        varying: *const Varyings,
-        out: *mut [u8; 4],
-    ) -> bool {
-        match &self.backend {
-            #[cfg(feature = "backend-jit")]
-            Backend::Jit { entry, .. } => unsafe { (entry)(ctx, varying, out) },
-            #[cfg(all(feature = "backend-interp", not(feature = "backend-jit")))]
-            Backend::Interp(p) => unsafe { p.evaluate(ctx, varying, out) },
-            Backend::Scalar => unsafe { self.scalar_eval(ctx, varying, out) },
-        }
-    }
-
-    /// Portable scalar evaluation of the fragment pipeline.
-    unsafe fn scalar_eval(
-        &self,
-        ctx: *const FragState,
-        varying: *const Varyings,
-        out: *mut [u8; 4],
-    ) -> bool {
-        unsafe {
-            let st = &*ctx;
-            let v = &*varying;
-            let mut color = v.color;
-
-            // 1. TexEnv evaluation for units 0 and 1
-            for unit in 0..2 {
-                if !self.key.tex_enabled[unit] {
-                    continue;
-                }
-                let tex = &st.textures[unit];
-                if !tex.enabled {
-                    continue;
-                }
-                let tc = if unit == 0 { v.tex0 } else { v.tex1 };
-                let linear = !matches!(tex.mag_filter, gl::NEAREST);
-                let s = sample_tex(tex, tc[0], tc[1], linear);
-                color = apply_texenv(self.key.texenv_mode[unit], s, color, st.texenv_color[unit]);
-            }
-
-            // 2. Fog evaluation
-            if self.key.fog_mode != 0 {
-                apply_fog_eval(st, &mut color, v.fog);
-            }
-
-            // 3. Alpha test
-            if !eval_alpha_pass(self.key.alpha_func, color[3], st.alpha_ref) {
-                return false;
-            }
-
-            let o = &mut *out;
-            // Write BGRA8 output (pre-blend)
-            o[0] = (clamp_unit(color[2]) * 255.0 + 0.5) as u8; // B
-            o[1] = (clamp_unit(color[1]) * 255.0 + 0.5) as u8; // G
-            o[2] = (clamp_unit(color[0]) * 255.0 + 0.5) as u8; // R
-            o[3] = (clamp_unit(color[3]) * 255.0 + 0.5) as u8; // A
-            true
-        }
-    }
-}
 
 // ============================================================================
 // Helper evaluation functions
@@ -376,171 +190,260 @@ fn sample_tex(tex: &SampledTexture, u: f32, v: f32, linear: bool) -> [f32; 4] {
 }
 
 // ============================================================================
-// Pipeline Cache
+// Fragment entry point
 // ============================================================================
 
-/// Global or device-owned shader cache storing compiled fragment routines.
-pub struct ShaderCache {
-    programs: HashMap<FragmentKey, FragmentProgram>,
-}
-
-impl Default for ShaderCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ShaderCache {
-    pub fn new() -> Self {
-        Self {
-            programs: HashMap::new(),
-        }
-    }
-
-    pub fn get_or_compile(&mut self, key: &FragmentKey) -> &FragmentProgram {
-        self.programs
-            .entry(*key)
-            .or_insert_with(|| FragmentProgram::compile(key))
-    }
-}
-
-/// Process-wide pipeline cache. Programs own their executable allocations;
-/// callers may retain a JIT entry pointer after releasing the cache lock.
-static PROGRAM_CACHE: spin::Mutex<Option<ShaderCache>> = spin::Mutex::new(None);
-
-/// Select the fragment routine once per draw. This keeps key construction,
-/// hashing, and the global cache lock out of the per-pixel raster loop.
-pub fn fragment_function_for_state(state: &FragState) -> FragFn {
-    let key = FragmentKey::from_state(state);
-    let mut guard = PROGRAM_CACHE.lock();
-    let prog = guard
-        .get_or_insert_with(ShaderCache::new)
-        .get_or_compile(&key);
-    prog.direct_entry().unwrap_or(fragment_entry_point)
-}
-
-/// Generic fallback dispatcher for scalar/interpreter configurations.
-/// JIT-enabled draw paths use [`fragment_function_for_state`] instead.
+/// Portable scalar evaluation of the fixed-function fragment pipeline.
+///
+/// Writes the pre-blend BGRA8 color and returns whether the fragment passes the
+/// alpha test (`false` = discard). Bound directly as the rasterizer's
+/// [`FragFn`]: the pipeline is a pure function of [`FragState`] and the
+/// interpolated [`Varyings`], so no per-draw lookup or code generation is
+/// involved. Blending, depth and stencil handling stay in the raster core.
+///
+/// # Safety
+///
+/// `ctx` must point to a live [`FragState`], `varying` to a live [`Varyings`],
+/// and `out` to a 4-byte writable array. Any [`SampledTexture`] with
+/// `enabled == true` in `ctx` must have `data` pointing to at least `data_len`
+/// readable bytes.
 pub unsafe fn fragment_entry_point(
     ctx: *const FragState,
     varying: *const Varyings,
     out: *mut [u8; 4],
 ) -> bool {
-    let key = FragmentKey::from_state(unsafe { &*ctx });
-    let mut guard = PROGRAM_CACHE.lock();
-    let prog = guard
-        .get_or_insert_with(ShaderCache::new)
-        .get_or_compile(&key);
-    unsafe { prog.evaluate(ctx, varying, out) }
+    unsafe {
+        let st = &*ctx;
+        let v = &*varying;
+        let mut color = v.color;
+
+        // 1. TexEnv evaluation for units 0 and 1.
+        for unit in 0..2 {
+            let tex = &st.textures[unit];
+            if !tex.enabled {
+                continue;
+            }
+            let tc = if unit == 0 { v.tex0 } else { v.tex1 };
+            let linear = tex.mag_filter != gl::NEAREST;
+            let s = sample_tex(tex, tc[0], tc[1], linear);
+            color = apply_texenv(st.texenv_mode[unit], s, color, st.texenv_color[unit]);
+        }
+
+        // 2. Fog evaluation.
+        if st.fog_mode != 0 {
+            apply_fog_eval(st, &mut color, v.fog);
+        }
+
+        // 3. Alpha test.
+        if !eval_alpha_pass(st.alpha_func, color[3], st.alpha_ref) {
+            return false;
+        }
+
+        let o = &mut *out;
+        // Write BGRA8 output (pre-blend).
+        o[0] = (clamp_unit(color[2]) * 255.0 + 0.5) as u8; // B
+        o[1] = (clamp_unit(color[1]) * 255.0 + 0.5) as u8; // G
+        o[2] = (clamp_unit(color[0]) * 255.0 + 0.5) as u8; // R
+        o[3] = (clamp_unit(color[3]) * 255.0 + 0.5) as u8; // A
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(feature = "backend-jit")]
-    #[test]
-    fn test_exponential_fog_jit_matches_reference() {
-        // MCPE regression: exponential fog (mode 2) is the only fragment
-        // program that emits a call (@vantage_expf). The external-name
-        // relocation path (ExternalName::TestCase) panicked at runtime with
-        // `not implemented!()` in ModuleReloc::from_mach_reloc; linear-fog
-        // coverage let it ship.
-        let state = FragState {
-            textures: [
-                vantage_raster::SampledTexture::disabled(),
-                vantage_raster::SampledTexture::disabled(),
-            ],
-            texenv_mode: [gl::TEXENV_REPLACE, gl::TEXENV_REPLACE],
-            texenv_color: [[0.0; 4]; 2],
+    fn evaluate(state: &FragState, varying: &Varyings) -> (bool, [u8; 4]) {
+        let mut out = [0u8; 4];
+        let pass =
+            unsafe { fragment_entry_point(state, varying, out.as_mut_ptr() as *mut [u8; 4]) };
+        (pass, out)
+    }
+
+    fn reference(state: &FragState, varying: &Varyings) -> (bool, [u8; 4]) {
+        let mut out = [0u8; 4];
+        let pass = unsafe {
+            vantage_raster::reference_frag(state, varying, out.as_mut_ptr() as *mut [u8; 4])
+        };
+        (pass, out)
+    }
+
+    /// 1x1 texture: with a single texel every wrap mode and filter agree, so
+    /// this isolates TexEnv/format handling from filter-footprint wrapping.
+    fn one_texel(data: &mut [u8], format: u32, mag_filter: u32) -> SampledTexture {
+        SampledTexture {
+            data: data.as_mut_ptr(),
+            data_len: data.len(),
+            width: 1,
+            height: 1,
+            format,
+            min_filter: gl::NEAREST,
+            mag_filter,
+            wrap_s: gl::REPEAT,
+            wrap_t: gl::REPEAT,
+            enabled: true,
+        }
+    }
+
+    fn base_state() -> FragState {
+        FragState {
+            textures: [SampledTexture::disabled(), SampledTexture::disabled()],
+            texenv_mode: [gl::TEXENV_MODULATE, gl::TEXENV_MODULATE],
+            texenv_color: [[0.25, 0.5, 0.75, 1.0], [0.5, 0.25, 0.75, 1.0]],
             alpha_func: gl::ALWAYS,
             alpha_ref: 0.0,
-            fog_mode: 2,
+            fog_mode: 0,
             fog_start: 0.0,
-            fog_end: 1.0,
+            fog_end: 10.0,
             fog_density: 0.3,
             fog_color: [0.5, 0.5, 0.5, 1.0],
+        }
+    }
+
+    #[test]
+    fn fragment_pipeline_matches_reference_across_alpha_tests() {
+        let mut state = base_state();
+        let varying = Varyings {
+            color: [0.3, 0.4, 0.5, 0.75],
+            tex0: [0.0, 0.0],
+            tex1: [0.0, 0.0],
+            fog: 0.0,
+            view_z: 1.0,
         };
-        let varyings = Varyings {
+        for alpha_func in [
+            gl::NEVER,
+            gl::LESS,
+            gl::EQUAL,
+            gl::LEQUAL,
+            gl::GREATER,
+            gl::NOTEQUAL,
+            gl::GEQUAL,
+            gl::ALWAYS,
+        ] {
+            for alpha_ref in [0.0, 0.75, 1.0] {
+                state.alpha_func = alpha_func;
+                state.alpha_ref = alpha_ref;
+                assert_eq!(
+                    evaluate(&state, &varying),
+                    reference(&state, &varying),
+                    "alpha_func={alpha_func:#x} alpha_ref={alpha_ref}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fragment_pipeline_matches_reference_across_fog_modes() {
+        let mut state = base_state();
+        let varying = Varyings {
             color: [0.3, 0.4, 0.5, 1.0],
             tex0: [0.0, 0.0],
             tex1: [0.0, 0.0],
             fog: 0.7,
             view_z: 1.0,
         };
-        let key = FragmentKey::from_state(&state);
-        let prog = FragmentProgram::compile(&key);
-        assert_eq!(prog.backend_name(), "cranelift-jit");
-        let mut out_prog = [0u8; 4];
-        let pass_prog =
-            unsafe { prog.evaluate(&state, &varyings, out_prog.as_mut_ptr() as *mut [u8; 4]) };
-        let mut out_ref = [0u8; 4];
-        let pass_ref = unsafe {
-            vantage_raster::reference_frag(&state, &varyings, out_ref.as_mut_ptr() as *mut [u8; 4])
-        };
-        assert_eq!(pass_prog, pass_ref);
-        assert_eq!(
-            out_prog, out_ref,
-            "expf call must produce native-code result"
-        );
+        // Mode 2 (EXP) is the case that used to need an `expf` relocation in
+        // the retired JIT backend; every mode is checked here.
+        for fog_mode in 0..4 {
+            for fog in [0.0, 0.7, 10.0, 25.0] {
+                state.fog_mode = fog_mode;
+                state.fog_density = 0.3;
+                let varying = Varyings { fog, ..varying };
+                assert_eq!(
+                    evaluate(&state, &varying),
+                    reference(&state, &varying),
+                    "fog_mode={fog_mode} fog={fog}"
+                );
+            }
+        }
     }
 
     #[test]
-    fn test_pliron_fragment_pipeline_matches_reference() {
-        let mut tex_data = [255u8, 128u8, 64u8, 255u8];
-        let tex = SampledTexture {
-            data: tex_data.as_mut_ptr(),
-            data_len: 4,
-            width: 1,
-            height: 1,
-            format: gl::GL_RGBA,
-            min_filter: gl::NEAREST,
-            mag_filter: gl::NEAREST,
-            wrap_s: gl::REPEAT,
-            wrap_t: gl::REPEAT,
-            enabled: true,
-        };
-
-        let state = FragState {
-            textures: [tex, SampledTexture::disabled()],
-            texenv_mode: [gl::TEXENV_MODULATE, gl::TEXENV_REPLACE],
-            texenv_color: [[0.0; 4]; 2],
-            alpha_func: gl::GREATER,
-            alpha_ref: 0.2,
-            fog_mode: 1,
-            fog_start: 0.0,
-            fog_end: 10.0,
-            fog_density: 0.1,
-            fog_color: [0.5, 0.5, 0.5, 1.0],
-        };
-
-        let varyings = Varyings {
+    fn fragment_pipeline_matches_reference_across_texenv_and_formats() {
+        let mut texel = [255u8, 128, 64, 200];
+        let varying = Varyings {
             color: [0.8, 0.6, 0.4, 0.9],
             tex0: [0.5, 0.5],
             tex1: [0.0, 0.0],
-            fog: 5.0, // halfway through linear fog
-            view_z: 5.0,
+            fog: 0.0,
+            view_z: 1.0,
         };
+        for format in [gl::GL_RGBA, gl::GL_LUMINANCE, gl::GL_LUMINANCE_ALPHA] {
+            for mag_filter in [gl::NEAREST, gl::LINEAR] {
+                for mode in [
+                    gl::TEXENV_REPLACE,
+                    gl::TEXENV_MODULATE,
+                    gl::TEXENV_DECAL,
+                    gl::TEXENV_BLEND,
+                    gl::TEXENV_ADD,
+                ] {
+                    let mut state = base_state();
+                    state.textures[0] = one_texel(&mut texel, format, mag_filter);
+                    state.texenv_mode = [mode, gl::TEXENV_REPLACE];
+                    assert_eq!(
+                        evaluate(&state, &varying),
+                        reference(&state, &varying),
+                        "format={format:#x} mag_filter={mag_filter:#x} texenv={mode:#x}"
+                    );
+                }
+            }
+        }
+    }
 
-        let key = FragmentKey::from_state(&state);
-        let prog = FragmentProgram::compile(&key);
-        // The whole point of the pipeline: this must be native code, not the
-        // scalar fallback (a silent jit Err would otherwise keep tests green).
-        assert_eq!(prog.backend_name(), "cranelift-jit");
+    /// CLAMP_TO_EDGE is the one wrap mode where the filter footprint is
+    /// clamped by every implementation, so it exercises the bilinear taps and
+    /// their weighting without depending on seam wrapping policy.
+    #[test]
+    fn fragment_pipeline_matches_reference_across_bilinear_weights() {
+        let mut texels = [
+            10u8, 20, 30, 255, //
+            40, 50, 60, 255, //
+            70, 80, 90, 255, //
+            100, 110, 120, 255,
+        ];
+        let mut state = base_state();
+        for mag_filter in [gl::NEAREST, gl::LINEAR] {
+            state.textures[0] = SampledTexture {
+                data: texels.as_mut_ptr(),
+                data_len: texels.len(),
+                width: 2,
+                height: 2,
+                format: gl::GL_RGBA,
+                min_filter: gl::NEAREST,
+                mag_filter,
+                wrap_s: gl::CLAMP_TO_EDGE,
+                wrap_t: gl::CLAMP_TO_EDGE,
+                enabled: true,
+            };
+            for u in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                for v in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                    let varying = Varyings {
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        tex0: [u, v],
+                        tex1: [0.0, 0.0],
+                        fog: 0.0,
+                        view_z: 1.0,
+                    };
+                    assert_eq!(
+                        evaluate(&state, &varying),
+                        reference(&state, &varying),
+                        "mag_filter={mag_filter:#x} uv=({u}, {v})"
+                    );
+                }
+            }
+        }
+    }
 
-        let mut out_prog = [0u8; 4];
-        let pass_prog =
-            unsafe { prog.evaluate(&state, &varyings, out_prog.as_mut_ptr() as *mut [u8; 4]) };
-
-        let mut out_ref = [0u8; 4];
-        let pass_ref = unsafe {
-            vantage_raster::reference_frag(&state, &varyings, out_ref.as_mut_ptr() as *mut [u8; 4])
+    #[test]
+    fn disabled_alpha_test_streams_color_through() {
+        let state = base_state();
+        let varying = Varyings {
+            color: [1.0, 0.0, 0.0, 1.0],
+            tex0: [0.0, 0.0],
+            tex1: [0.0, 0.0],
+            fog: 0.0,
+            view_z: 1.0,
         };
-
-        assert_eq!(pass_prog, pass_ref, "Alpha pass must match");
-        assert_eq!(
-            out_prog, out_ref,
-            "Color output must match reference_frag exactly"
-        );
+        assert_eq!(evaluate(&state, &varying), (true, [0, 0, 255, 255]));
     }
 }

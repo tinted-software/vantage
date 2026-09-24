@@ -1,0 +1,11 @@
+[package]
+name = "vantage-codegen"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Pure-Rust GPU machine-code generation (AMDGPU/RDNA first) from pliron LLVM-dialect IR"
+
+[dependencies]
+hashbrown.workspace = true
+pliron = { git = "https://github.com/pliron-org/pliron", default-features = false }
+pliron-llvm = { git = "https://github.com/pliron-org/pliron", default-features = false }

@@ -18,6 +18,9 @@
 #![no_std]
 extern crate alloc;
 
+pub mod amdgpu;
+pub use amdgpu::*;
+
 use core::ffi::{c_char, c_int, c_ulong, c_void};
 
 // ============================================================================
@@ -25,11 +28,11 @@ use core::ffi::{c_char, c_int, c_ulong, c_void};
 // ============================================================================
 
 extern "C" {
-    fn open(path: *const c_char, flags: c_int, ...) -> c_int;
-    fn close(fd: c_int) -> c_int;
-    fn readlink(path: *const c_char, buf: *mut c_char, bufsiz: usize) -> isize;
-    fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -> c_int;
-    fn mmap(
+    pub(crate) fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+    pub(crate) fn close(fd: c_int) -> c_int;
+    pub(crate) fn readlink(path: *const c_char, buf: *mut c_char, bufsiz: usize) -> isize;
+    pub(crate) fn ioctl(fd: c_int, request: c_ulong, argp: *mut c_void) -> c_int;
+    pub(crate) fn mmap(
         addr: *mut c_void,
         len: usize,
         prot: c_int,
@@ -37,17 +40,17 @@ extern "C" {
         fd: c_int,
         offset: i64,
     ) -> *mut c_void;
-    fn munmap(addr: *mut c_void, len: usize) -> c_int;
-    fn __errno_location() -> *mut c_int;
+    pub(crate) fn munmap(addr: *mut c_void, len: usize) -> c_int;
+    pub(crate) fn __errno_location() -> *mut c_int;
 }
 
 const O_RDWR: c_int = 0o2;
 const O_CLOEXEC: c_int = 0o2000000;
-const PROT_READ: c_int = 1;
-const PROT_WRITE: c_int = 2;
-const MAP_SHARED: c_int = 1;
+pub(crate) const PROT_READ: c_int = 1;
+pub(crate) const PROT_WRITE: c_int = 2;
+pub(crate) const MAP_SHARED: c_int = 1;
 
-fn errno() -> i32 {
+pub(crate) fn errno() -> i32 {
     unsafe { *__errno_location() }
 }
 
@@ -62,11 +65,11 @@ const fn ioc(dir: u64, nr: u64, typ: u8, size: u64) -> c_ulong {
     ((dir << 30) | ((size & 0x3fff) << 16) | ((typ as u64) << 8) | nr) as c_ulong
 }
 
-const fn iowr(nr: u64, typ: u8, size: u64) -> c_ulong {
+pub(crate) const fn iowr(nr: u64, typ: u8, size: u64) -> c_ulong {
     ioc(_IOC_READ | _IOC_WRITE, nr, typ, size)
 }
 
-const fn iow(nr: u64, typ: u8, size: u64) -> c_ulong {
+pub(crate) const fn iow(nr: u64, typ: u8, size: u64) -> c_ulong {
     ioc(_IOC_WRITE, nr, typ, size)
 }
 
@@ -103,9 +106,9 @@ struct DrmVersion {
 }
 
 #[repr(C)]
-struct DrmGemClose {
-    handle: u32,
-    pad: u32,
+pub(crate) struct DrmGemClose {
+    pub(crate) handle: u32,
+    pub(crate) pad: u32,
 }
 
 /// PRIME handle/fd exchange. `fd` is out for HANDLE_TO_FD, in for FD_TO_HANDLE.
@@ -263,6 +266,33 @@ impl DrmDevice {
                 if generic.is_none() {
                     generic = Some(dev);
                 }
+            }
+        }
+        generic.ok_or(Error::NoDevice)
+    }
+
+    /// Opens the first accessible render node (`/dev/dri/renderD128..159`),
+    /// preferring AMDGPU. Render nodes are unprivileged and designed for
+    /// 3D rendering, compute, and hardware command submission.
+    pub fn open_render() -> Result<Self, Error> {
+        let mut generic: Option<Self> = None;
+        for n in RENDER_NODE_FIRST..RENDER_NODE_LAST {
+            let mut path = alloc::vec::Vec::new();
+            push_ascii(&mut path, b"/dev/dri/renderD");
+            push_u32(&mut path, n);
+            path.push(0);
+            let Ok(dev) = Self::open_path(&path) else {
+                continue;
+            };
+            let amd = matches!(
+                dev.sysfs_driver_name().as_deref(),
+                Some(b"amdgpu") | Some(b"radeon")
+            );
+            if amd {
+                return Ok(dev);
+            }
+            if generic.is_none() {
+                generic = Some(dev);
             }
         }
         generic.ok_or(Error::NoDevice)
@@ -649,5 +679,59 @@ mod tests {
         dev.gem_close(h2).expect("gem_close reimported handle");
         unsafe { close(fd) };
         drop(bo);
+    }
+
+    #[test]
+    fn real_device_amdgpu_queries_and_alloc() {
+        let dev = match DrmDevice::open_render() {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        if dev.sysfs_driver_name().as_deref() != Some(b"amdgpu") {
+            return; // Only run on AMDGPU hardware
+        }
+
+        // Queries + BO alloc only: no command submission, safe on any GPU.
+        let amd = AmdgpuDevice::new(dev).expect("amdgpu device");
+        let ip = amd.gfx_ip;
+        std::println!(
+            "AMD GFX IP: {}.{}",
+            ip.hw_ip_version_major,
+            ip.hw_ip_version_minor
+        );
+        assert!(ip.hw_ip_version_major >= 9, "expected GFX9 or newer");
+        assert!(ip.ib_start_alignment > 0);
+        assert!(amd.info.virtual_address_offset > 0);
+        let vram_gtt = amd.query_vram_gtt().expect("query vram gtt");
+        assert!(vram_gtt.gtt_size > 0);
+
+        let ctx_id = amd.create_context().expect("create context");
+        assert_eq!(
+            amd.query_context_state(ctx_id).expect("ctx state") & AMDGPU_CTX_QUERY2_FLAGS_GUILTY,
+            0
+        );
+
+        let va = amd.info.virtual_address_offset.max(0x100_0000);
+        let mut bo = amd
+            .alloc_bo(
+                4096,
+                4096,
+                AMDGPU_GEM_DOMAIN_GTT,
+                AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED,
+                va,
+                true,
+            )
+            .expect("alloc and map BO");
+        assert_eq!(bo.gpu_va, va);
+        {
+            let slice = bo.as_slice_mut().expect("cpu slice");
+            slice[0..4].copy_from_slice(&0xdeadbeefu32.to_le_bytes());
+            slice[4092..4096].copy_from_slice(&0xcafebabau32.to_le_bytes());
+        }
+        let slice = bo.as_slice().expect("cpu slice readback");
+        assert_eq!(&slice[0..4], &0xdeadbeefu32.to_le_bytes());
+        assert_eq!(&slice[4092..4096], &0xcafebabau32.to_le_bytes());
+        drop(bo);
+        amd.destroy_context(ctx_id).expect("destroy context");
     }
 }

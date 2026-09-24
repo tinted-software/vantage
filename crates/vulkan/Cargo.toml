@@ -11,18 +11,16 @@ crate-type = ["rlib", "cdylib"]
 
 [features]
 default = ["std"]
-std = ["vantage-hal/std", "vantage-shader/std"]
+std = ["vantage-hal/std", "vantage-shader/std", "vantage-shader/spirv-frontend"]
 capi = []
 
 [dependencies]
 smallvec = { version = "1.16.1", default-features = false }
 vantage-hal = { path = "../hal", default-features = false }
-vantage-shader = { path = "../shader", default-features = false }
+vantage-shader = { path = "../shader", default-features = false, features = ["spirv-frontend"] }
 vantage-raster = { path = "../raster", default-features = false }
 hashbrown.workspace = true
 bytemuck.workspace = true
-spirv.workspace = true
-rspirv.workspace = true
 
 [package.metadata.capi.library]
 name = "vantage_vk"

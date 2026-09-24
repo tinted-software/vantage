@@ -3,8 +3,9 @@
 //! Scanline rasterization with 28.4 fixed-point edge functions (mesa swrast
 //! convention). All fixed-function per-pixel state — depth test, stencil,
 //! blending, masks — lives here. The fragment program seam (`FragFn`)
-//! computes only per-pixel color (texenv, fog, alpha-test): Phase 3 fills it
-//! with pliron-interpreted (later JIT'd) code.
+//! computes only per-pixel color (texenv, fog, alpha-test); the fragment
+//! pipeline in `vantage-shader` fills it, with [`reference_frag`] here as the
+//! scalar reference implementation.
 //!
 //! Threading: single-threaded. The draw loop is structured over tiles so a
 //! future threads feature can dispatch `Job`s; do not rely on global state.
@@ -133,8 +134,8 @@ pub struct Varyings {
 
 /// One sampled texture as seen by fragment code.
 ///
-/// `repr(C)`: compiled fragment programs (pliron -> cranelift) dereference
-/// these structs at fixed offsets; the layout is an ABI.
+/// `repr(C)`: the fragment pipeline reads these fields through the pointers in
+/// [`FragState`]; the layout is an ABI.
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct SampledTexture {
@@ -172,7 +173,7 @@ impl SampledTexture {
 
 /// Per-pixel fragment context: textures, texenv, fog, alpha ref.
 ///
-/// `repr(C)` — see `SampledTexture`; offsets are read by JIT'd code.
+/// `repr(C)` — see `SampledTexture`; the layout is part of the fragment ABI.
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct FragState {

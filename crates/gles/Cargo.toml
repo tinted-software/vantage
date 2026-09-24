@@ -18,7 +18,6 @@ smallvec = { version = "1.16.1", default-features = false }
 
 vantage-hal = { path = "../hal", default-features = false }
 vantage-raster = { path = "../raster", default-features = false }
-vantage-shader = { path = "../shader", default-features = false }
 
 bytemuck.workspace = true
 glam.workspace = true

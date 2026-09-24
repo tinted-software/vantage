@@ -2,8 +2,8 @@
 //!
 //! The WGSL fixed-function shader that used to live here was the behavioral
 //! spec for all per-fragment math (texenv, alpha test, fog, the
-//! `(z+w)*0.5` clip-Z remap); that math is now JIT-compiled by
-//! `vantage-shader` (cranelift) in Phase 3.
+//! `(z+w)*0.5` clip-Z remap); that math now lives in `vantage-shader`'s
+//! portable fragment pipeline.
 
 use alloc::string::String;
 use alloc::vec::Vec;

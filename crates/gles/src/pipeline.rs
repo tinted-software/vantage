@@ -1,8 +1,8 @@
 //! Fixed-function pipeline state key.
 //!
 //! Identifies a unique combination of raster/fixed-function state for the
-//! pipeline cache. Carried over from the wgpu renderer; Phase 3 extends the
-//! fragment-state portion for the cranelift JIT cache key.
+//! pipeline cache. Carried over from the wgpu renderer; it also covers the
+//! fragment-state portion of the fragment pipeline.
 
 /// Raster/fixed-function pipeline identity.
 pub struct PipelineKey {
